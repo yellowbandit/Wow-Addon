@@ -1,0 +1,10 @@
+## Interface: 120001, 120005, 120007
+## Title: DummyAnalyzer
+## Notes: Training dummy DPS + cast tracker. Registers as a GRIP-EMS plugin.
+## Author: You
+## Version: 2.1
+
+## SavedVariables: DummyAnalyzerDB
+## Dependencies: GRIP-EMS
+
+core.lua

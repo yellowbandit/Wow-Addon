@@ -1,0 +1,39 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "big-pickle",
+  "instructions": [
+    ".opencode/FULL_CONTEXT_RECAP.md",
+    ".opencode/SESSION_RECAP.md"
+  ],
+  "agent": {
+    "architect": {
+      "description": "Plans architecture and orchestrates tasks",
+      "model": "big-pickle",
+      "prompt": "You are the architect for DummyAnalyzer, a WoW training-dummy DPS analyzer and GRIP-EMS sequence optimizer. Consult FULL_CONTEXT_RECAP.md before making decisions. CRITICAL: WoW 12.x uses secret strings, NO Ace3, use C_DamageMeter not COMBAT_LOG.",
+      "mode": "subagent"
+    },
+    "coder": {
+      "description": "Implements code changes only",
+      "model": "big-pickle",
+      "prompt": "You are the coder for DummyAnalyzer. Pure WoW API Lua only, no Ace3. Single-file addon (core.lua ~6400 lines). All new code must follow WoW 12.x compatibility rules from WOW_12_COMPAT_GUIDELINES.md. Do not redesign.",
+      "mode": "subagent"
+    },
+    "critic": {
+      "description": "Reviews code for bugs, security, edge cases",
+      "model": "big-pickle",
+      "prompt": "You are the critic for DummyAnalyzer. Review harshly: check for secret string taint, font nil errors, C_DamageMeter API correctness, GRIP-EMS format compliance, and WoW 12.x compat. Every aura name comparison must be pcall-wrapped.",
+      "mode": "subagent"
+    }
+  },
+  "skills": {
+    "paths": ["~/.config/opencode/skills"]
+  },
+  "mcp": {
+    "icm": {
+      "type": "local",
+      "command": ["C:\\Users\\Tanner\\AppData\\Local\\icm\\bin\\icm.exe", "serve"],
+      "enabled": true,
+      "env": { "ICM_DB_PATH": "H:\\OPEN CODE WOW CHAT\\DummyAnalyzer\\opencode.db" }
+    }
+  }
+}
