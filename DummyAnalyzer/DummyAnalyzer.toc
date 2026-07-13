@@ -2,7 +2,7 @@
 ## Title: DummyAnalyzer
 ## Notes: Training dummy DPS + cast tracker. Registers as a GRIP-EMS plugin.
 ## Author: You
-## Version: 2.2.0
+## Version: 2.2
 
 ## SavedVariables: DummyAnalyzerDB
 ## Dependencies: GRIP-EMS
