@@ -5255,11 +5255,12 @@ ShowConfigureDialog = function(parent)
     if not db.settings then db.settings = {} end
     local s = db.settings
 
-    local dialog = CreateStyledFrame("Frame", nil, parent or UIParent); trackDialog(dialog)
+    local dialog = CreateStyledFrame("Frame", nil, UIParent); trackDialog(dialog)
     dialog:SetSize(480, 520)
     dialog:SetPoint("CENTER")
     ApplyBackdrop(dialog, false)
     dialog:SetFrameLevel((parent or UIParent):GetFrameLevel() + 10)
+    if parent and parent ~= UIParent and parent.Hide then parent:Hide() end
 
     local titleBar = CreateStyledFrame("Frame", nil, dialog)
     titleBar:SetPoint("TOPLEFT", dialog, "TOPLEFT")
@@ -5283,7 +5284,7 @@ ShowConfigureDialog = function(parent)
     xlbl:SetText("X")
     xlbl:SetPoint("CENTER")
     xlbl:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3], C.textMuted[4])
-    closeX:SetScript("OnClick", function() dialog:Hide() end)
+    closeX:SetScript("OnClick", function() dialog:Hide(); if parent and parent ~= UIParent and parent.Show then parent:Show() end end)
 
     local tabRow = CreateFrame("Frame", nil, dialog)
     tabRow:SetPoint("TOPLEFT", dialog, "TOPLEFT", 20, -42)
@@ -5423,6 +5424,7 @@ ShowConfigureDialog = function(parent)
             addBtn:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 8, 6)
             -- Load existing required spells from settings
             local loaded = s.requiredSpells or {}
+            if #loaded > 0 then DebugLog("info", "cfg-req", "Loaded: " .. table.concat(loaded, ", ")) end
             for _, spellName in ipairs(loaded) do
                 AddReqRow(spellName)
             end
@@ -7327,11 +7329,15 @@ local function CreateMainFrame()
     CreateSeparator(content, "TOPLEFT", stopBtn, "BOTTOMLEFT", 0, -25)
 
     local savedLogsBtn = CreateStyledButton(content, "Compare Logs", 130, 32, function()
+        if mainFrame then mainFrame:Hide() end
         CreateSavedLogsBrowser()
     end, "primary")
     savedLogsBtn:SetPoint("TOPLEFT", instrText, "BOTTOMLEFT", 0, -70)
 
-    local emsBtn = CreateStyledButton(content, "Export Sequence", 140, 32, ShowEMSExportWindow, "primary")
+    local emsBtn = CreateStyledButton(content, "Export Sequence", 140, 32, function()
+        if mainFrame then mainFrame:Hide() end
+        ShowEMSExportWindow()
+    end, "primary")
     emsBtn:SetPoint("LEFT", savedLogsBtn, "RIGHT", 10, 0)
 
     return mainFrame
