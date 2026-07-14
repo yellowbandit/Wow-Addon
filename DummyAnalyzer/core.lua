@@ -3360,7 +3360,17 @@ local function CreateSavedLogsBrowser()
                 buffGaps = log.buffGaps or {}
                 debuffUptime = log.debuffUptime or {}
                 spellPowerCosts = log.spellPowerCosts or {}
-                ShowReport()
+                local reportTextStr = GenerateReportText()
+                CreateReportPopup()
+                reportPopup.editBox:SetText(reportTextStr)
+                local numLines = 1
+                for _ in string.gmatch(reportTextStr, "\n") do numLines = numLines + 1 end
+                reportPopup.editBox:SetHeight(math.max(200, numLines * 14 + 20))
+                reportPopup.editBox:SetCursorPosition(0)
+                reportPopup.scrollFrame:SetVerticalScroll(0)
+                reportPopup.originalText = reportTextStr
+                RegisterAddonWindow(reportPopup)
+                reportPopup:Show()
                 currentDuration = savedDuration
                 Addon.testStartSequence = savedStartSeq
                 testActive = savedTestActive
