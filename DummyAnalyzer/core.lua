@@ -4624,22 +4624,16 @@ GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, duratio
     seqLines[#seqLines + 1] = "Step Function: " .. (cfg.stepFunction or "Priority")
     seqLines[#seqLines + 1] = "Reset: combat/target"
     seqLines[#seqLines + 1] = ""
-    if cfg.loopBlock then
-        seqLines[#seqLines + 1] = "[loop]"
-    end
-    local intervalDisplayed = {}
-    for i, name in ipairs(finalSteps) do
-        local prefix = GetActionPrefix(name)
-        local suffix = (interleaveCandidates[name] and not intervalDisplayed[name]) and string.format(" (interval:%d)", interleaveCandidates[name]) or ""
-        if suffix ~= "" then
-            intervalDisplayed[name] = true
-        end
-        seqLines[#seqLines + 1] = string.format("%2d. %s [combat] %s%s", i, prefix, name, suffix)
-    end
-    if cfg.loopBlock then
-        seqLines[#seqLines + 1] = "[/loop]"
-    end
-    seqText = table.concat(seqLines, "\n")
+	local intervalDisplayed = {}
+	for i, name in ipairs(finalSteps) do
+		local prefix = GetActionPrefix(name)
+		local suffix = (interleaveCandidates[name] and not intervalDisplayed[name]) and string.format(" (interval:%d)", interleaveCandidates[name]) or ""
+		if suffix ~= "" then
+			intervalDisplayed[name] = true
+		end
+		seqLines[#seqLines + 1] = string.format("%2d. %s [combat] %s%s", i, prefix, name, suffix)
+	end
+	seqText = table.concat(seqLines, "\n")
 
     -- Generate !EMS1! compressed import string
     if C_EncodingUtil then
@@ -4671,17 +4665,21 @@ GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, duratio
                     macro = string.format("%s [combat] %s", prefix, name),
                 })
             end
-        end
+	end
+	
+	if cfg.loopBlock then
+		actions = {{ type = "loop", children = actions }}
+	end
 
-        local classID = select(3, UnitClass("player"))
-        local specID  = spec and GetSpecializationInfo(spec)
-        local sequence = {
-            icon = uniqueOrder[1] or "INV_Misc_QuestionMark",
-            versions = {
-                [1] = {
-                    stepFunction = cfg.stepFunction or "Priority",
-                    steps = {},
-                    actions = actions,
+	local classID = select(3, UnitClass("player"))
+	local specID  = spec and GetSpecializationInfo(spec)
+	local sequence = {
+		icon = uniqueOrder[1] or "INV_Misc_QuestionMark",
+		versions = {
+			[1] = {
+				stepFunction = cfg.stepFunction or "Priority",
+				steps = {},
+				actions = actions,
                     keyPress = cfg.keyPress or "/startattack",
                     keyRelease = cfg.keyRelease or "",
                     resetOnCombat = (cfg.resetOnCombat ~= nil) and cfg.resetOnCombat or true,
@@ -4983,7 +4981,7 @@ end
 -- ============================================
 -- EMS IMPORT STRING GENERATION
 -- ============================================
-GenerateEMSImportString = function(castCounts, damageData, orderedSteps)
+GenerateEMSImportString = function(castCounts, damageData, orderedSteps, wrapInLoop)
     if not castCounts or not next(castCounts) then return nil end
     if not C_EncodingUtil then return nil end
     local sorted = {}
@@ -5078,6 +5076,9 @@ GenerateEMSImportString = function(castCounts, damageData, orderedSteps)
                 macro = string.format("%s [combat] %s", prefix, sorted[i].name),
             })
         end
+    end
+    if wrapInLoop then
+        actions = {{ type = "loop", children = actions }}
     end
     local actionMacros = {}
     for _, a in ipairs(actions) do actionMacros[#actionMacros+1] = a.macro end
@@ -5543,7 +5544,7 @@ ShowConfigureDialog = function(parent)
             local lpLabel = panel:CreateFontString(nil, "OVERLAY")
             SafeSetFont(lpLabel, FONT, 11)
             lpLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, y)
-            lpLabel:SetText("Wrap in [loop] block:")
+            lpLabel:SetText("Wrap in Loop block:")
             lpLabel:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
             local lpBtn = CreateStyledFrame("Button", nil, panel)
             lpBtn:SetSize(18, 18)
@@ -5557,7 +5558,7 @@ ShowConfigureDialog = function(parent)
             local lpHint = panel:CreateFontString(nil, "OVERLAY")
             SafeSetFont(lpHint, FONT, 9)
             lpHint:SetPoint("LEFT", lpBtn, "RIGHT", 6, 0)
-            lpHint:SetText("Wraps main steps in [loop]...[/loop]")
+            lpHint:SetText("Wraps steps in a GRIP-EMS Loop block (action tree)")
             lpHint:SetTextColor(C.text[1], C.text[2], C.text[3], 0.5)
             y = y - 36
 
@@ -6003,7 +6004,8 @@ ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, 
         local macros, ordNames = ParseSequenceLines(rawSeqText)
         seqText = table.concat(macros, "\n")
         local normScore = seqScore / math.max(playerDuration or 1, 1)
-        if not Addon.bestSequence or not Addon.bestSequence.normScore then Addon.bestSequence = {score = 0, normScore = 0} end
+        if not Addon.bestSequence then Addon.bestSequence = {score = 0, normScore = 0} end
+        if not Addon.bestSequence.normScore then Addon.bestSequence.normScore = 0 end
         if normScore > (Addon.bestSequence.normScore or 0) then
             local fullStepNames = {}
             for _, m in ipairs(macros) do
@@ -6132,7 +6134,7 @@ ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, 
                     local sn = ExtractSpellFromSeqLine(m)
                     if sn then fullStepNames[#fullStepNames + 1] = sn end
                 end
-                Addon.bestSequence = {score = bestDPS, seqText = table.concat(macros, "\n"), importStr = "", reasoningText = "", orderedSpellNames = ordered, fullSteps = fullStepNames}
+                Addon.bestSequence = {score = bestDPS, normScore = bestDPS / math.max(bestLog.duration or 1, 1), seqText = table.concat(macros, "\n"), importStr = "", reasoningText = "", orderedSpellNames = ordered, fullSteps = fullStepNames}
                 db.bestSequence = Addon.bestSequence
                 do -- auto-push
                     local s = db.settings or {}
@@ -6167,7 +6169,7 @@ ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, 
                 local sn = ExtractSpellFromSeqLine(m)
                 if sn then fullStepNames[#fullStepNames + 1] = sn end
             end
-            Addon.bestSequence = {score = bestScore or 0, seqText = table.concat(macros, "\n"), importStr = bestImportStr, reasoningText = bestReasonStr, orderedSpellNames = ordered, fullSteps = fullStepNames}
+            Addon.bestSequence = {score = bestScore or 0, normScore = (bestScore or 0) / math.max(totalDuration, 1), seqText = table.concat(macros, "\n"), importStr = bestImportStr, reasoningText = bestReasonStr, orderedSpellNames = ordered, fullSteps = fullStepNames}
             do -- auto-push
                 local s = (GetCharDB()).settings or {}
                 if s.autoPush and fullStepNames and #fullStepNames > 0 then
@@ -6219,7 +6221,7 @@ ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, 
             if sn then fullStepNames[#fullStepNames + 1] = sn end
         end
         -- Create basic bestSequence for Push button
-        Addon.bestSequence = { score = 0, seqText = seqText, importStr = GenerateEMSImportString(simcCastCounts, simcDamage), reasoningText = "Generated from SimC import (no real logs).", orderedSpellNames = ordered, fullSteps = fullStepNames }
+        Addon.bestSequence = { score = 0, normScore = 0, seqText = seqText, importStr = GenerateEMSImportString(simcCastCounts, simcDamage), reasoningText = "Generated from SimC import (no real logs).", orderedSpellNames = ordered, fullSteps = fullStepNames }
         local persistDb = GetCharDB()
         persistDb.bestSequence = Addon.bestSequence
         -- Show in export dialog
