@@ -6027,10 +6027,26 @@ ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, 
 
     local emsBtn, bestBtn, nextBtn, simcBtn
     local function ClearHighlights()
-        if emsBtn then emsBtn:SetBackdropColor(C.btn[1], C.btn[2], C.btn[3], C.btn[4]) end
-        if bestBtn then bestBtn:SetBackdropColor(C.btn[1], C.btn[2], C.btn[3], C.btn[4]) end
-        if nextBtn then nextBtn:SetBackdropColor(C.btn[1], C.btn[2], C.btn[3], C.btn[4]) end
-        if simcBtn then simcBtn:SetBackdropColor(C.btn[1], C.btn[2], C.btn[3], C.btn[4]) end
+        for _, b in ipairs({bestBtn, simcBtn, nextBtn, emsBtn}) do
+            if b then
+                b._isSelected = false
+                b:SetBackdropColor(C.btn[1], C.btn[2], C.btn[3], C.btn[4])
+            end
+        end
+    end
+    local function HighlightTab(btn)
+        if not btn then return end
+        ClearHighlights()
+        btn._isSelected = true
+        btn:SetBackdropColor(C.btnPrimary[1], C.btnPrimary[2], C.btnPrimary[3], C.btnPrimary[4])
+        btn:SetScript("OnLeave", function()
+            if btn._isSelected then
+                btn:SetBackdropColor(C.btnPrimary[1], C.btnPrimary[2], C.btnPrimary[3], C.btnPrimary[4])
+            else
+                btn:SetBackdropColor(C.btn[1], C.btn[2], C.btn[3], C.btn[4])
+                btn:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], C.border[4])
+            end
+        end)
     end
     local function GetSimcWarning()
         local dbSim = GetCharDB()
@@ -6118,8 +6134,7 @@ ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, 
                 end
                 seqText = table.concat(macros, "\n")
                 importStr = ""; reasoningText = ""
-                ClearHighlights()
-                if bestBtn then bestBtn:SetBackdropColor(C.selected[1], C.selected[2], C.selected[3], C.selected[4]) end
+                HighlightTab(bestBtn)
                 SetEditText(GetSimcWarning() .. display)
                 print(string.format("|cff33ff33[DummyAnalyzer]|r Best sequence from log: %s (%s DPS)", bestLog.label or ("#" .. tostring(bestLog.id)), Addon.FormatNumber(bestDPS)))
                 return
@@ -6162,8 +6177,7 @@ ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, 
 
             seqText = table.concat(macros, "\n")  -- ONLY /cast lines, so Push fallback always works
             importStr = bestImportStr; reasoningText = bestReasonStr
-            ClearHighlights()
-            if bestBtn then bestBtn:SetBackdropColor(C.selected[1], C.selected[2], C.selected[3], C.selected[4]) end
+            HighlightTab(bestBtn)
             SetEditText(GetSimcWarning() .. display)
             print(string.format("|cff33ff33[DummyAnalyzer]|r Best sequence from %d logs (score: %s)", logCount, Addon.FormatNumber(bestScore or 0)))
         else
@@ -6202,8 +6216,7 @@ ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, 
         Addon.bestSequence = { score = 0, normScore = 0, seqText = seqText, importStr = importStr, reasoningText = reasoningText, orderedSpellNames = ordered, fullSteps = fullStepNames }
         local persistDb = GetCharDB()
         persistDb.bestSequence = Addon.bestSequence
-        ClearHighlights()
-        if simcBtn then simcBtn:SetBackdropColor(C.selected[1], C.selected[2], C.selected[3], C.selected[4]) end
+        HighlightTab(simcBtn)
         local simcCtx = { logLabel = "SimC", id = nil }
         local simcDeficit = ComputeDeficitSnapshot(simcCastCounts, db.simcData, 0)
         local simcDisplay = BuildKidFriendlyDisplay("best", simcCtx, 0, 1, macros, ordered, simcDeficit)
@@ -6248,8 +6261,7 @@ ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, 
             local display = BuildKidFriendlyDisplay("next", ctx, nScore, playerDuration, macros, ordered, deficit, steps ~= nil)
             seqText = table.concat(macros, "\n")  -- ONLY /cast lines
             importStr = nImp; reasoningText = nReason
-ClearHighlights()
-        if nextBtn then nextBtn:SetBackdropColor(C.selected[1], C.selected[2], C.selected[3], C.selected[4]) end
+HighlightTab(nextBtn)
         SetEditText(GetSimcWarning() .. display)
             local normS = nScore and (nScore / math.max(playerDuration, 1)) or 0
             if not Addon.bestSequence then Addon.bestSequence = {score = 0, normScore = 0} end
@@ -6275,8 +6287,7 @@ ClearHighlights()
 
     -- "EMS Import" — show ONLY the current EMS import string
     emsBtn = CreateStyledButton(tabRow, "EMS Import", 120, 28, function()
-        ClearHighlights()
-        if emsBtn then emsBtn:SetBackdropColor(C.selected[1], C.selected[2], C.selected[3], C.selected[4]) end
+        HighlightTab(emsBtn)
         local warn = GetSimcWarning()
         local body = importStr or err or "Failed to generate import string."
         SetEditText(warn .. body)
