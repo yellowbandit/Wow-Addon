@@ -6204,7 +6204,10 @@ ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, 
         persistDb.bestSequence = Addon.bestSequence
         ClearHighlights()
         if simcBtn then simcBtn:SetBackdropColor(C.selected[1], C.selected[2], C.selected[3], C.selected[4]) end
-        SetEditText(GetSimcWarning() .. "Generated basic priority sequence from SimC import. Run a training dummy test, then click Best Sequence to optimize.")
+        local simcCtx = { logLabel = "SimC", id = nil }
+        local simcDeficit = ComputeDeficitSnapshot(simcCastCounts, db.simcData, 0)
+        local simcDisplay = BuildKidFriendlyDisplay("best", simcCtx, 0, 1, macros, ordered, simcDeficit)
+        SetEditText(GetSimcWarning() .. simcDisplay .. "\n\n|cffffff00Run a training dummy test, then click Best Sequence to optimize.|r")
         print("|cff33ff33[DummyAnalyzer]|r Generated basic sequence from SimC import (" .. #ordered .. " spells).")
     end, "secondary")
     simcBtn:SetPoint("LEFT", bestBtn, "RIGHT", 10, 0)
