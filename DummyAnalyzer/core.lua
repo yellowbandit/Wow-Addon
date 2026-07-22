@@ -5241,18 +5241,21 @@ ShowConfigureDialog = function(parent)
     if not db.settings then db.settings = {} end
     local s = db.settings
 
-    -- Layout constants
-    local WIN_W, WIN_H, WIN_PAD = 560, 540, 20
+    local WIN_W    = 560
+    local WIN_PAD  = 20
+    local TITLE_H  = 32
+    local TAB_H    = 28
     local ROW_H    = 30
     local LABEL_X  = 16
     local CTRL_X   = 280
     local CTRL_W   = 150
-    local CHK_GAP  = 62
     local BTN_W    = 170
     local BTN_H    = 28
+    local PANEL_TOP = TITLE_H + 10 + TAB_H + 10 -- title + gap + tab + gap = 80
+    local PANEL_INNER_W = WIN_W - 2 * WIN_PAD   -- 520
 
     local dialog = CreateStyledFrame("Frame", nil, UIParent); trackDialog(dialog)
-    dialog:SetSize(560, 540)
+    dialog:SetSize(WIN_W, 400) -- temporary, resized after content
     dialog:SetPoint("CENTER")
     ApplyBackdrop(dialog, false)
     dialog:SetFrameLevel((parent or UIParent):GetFrameLevel() + 10)
@@ -5261,7 +5264,7 @@ ShowConfigureDialog = function(parent)
     local titleBar = CreateStyledFrame("Frame", nil, dialog)
     titleBar:SetPoint("TOPLEFT", dialog, "TOPLEFT")
     titleBar:SetPoint("TOPRIGHT", dialog, "TOPRIGHT")
-    titleBar:SetHeight(32)
+    titleBar:SetHeight(TITLE_H)
     titleBar:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
     titleBar:SetBackdropColor(C.title[1], C.title[2], C.title[3], C.title[4])
     local titleText = titleBar:CreateFontString(nil, "OVERLAY")
@@ -5283,9 +5286,9 @@ ShowConfigureDialog = function(parent)
     closeX:SetScript("OnClick", function() dialog:Hide(); if parent and parent ~= UIParent and parent.Show then parent:Show() end end)
 
     local tabRow = CreateFrame("Frame", nil, dialog)
-    tabRow:SetPoint("TOPLEFT", dialog, "TOPLEFT", WIN_PAD, -42)
-    tabRow:SetPoint("TOPRIGHT", dialog, "TOPRIGHT", -WIN_PAD, -42)
-    tabRow:SetHeight(28)
+    tabRow:SetPoint("TOPLEFT", dialog, "TOPLEFT", WIN_PAD, -(TITLE_H + 10))
+    tabRow:SetPoint("TOPRIGHT", dialog, "TOPRIGHT", -WIN_PAD, -(TITLE_H + 10))
+    tabRow:SetHeight(TAB_H)
 
     local panels = {}
     local lastTab
@@ -5296,8 +5299,8 @@ ShowConfigureDialog = function(parent)
         if lastTab then lastTab:SetBackdropColor(C.selected[1], C.selected[2], C.selected[3], C.selected[4]) end
     end
 
-    local tabs = {"Required Spells", "Sequence Preferences"}
-    for ti, tname in ipairs(tabs) do
+    local tabNames = {"Required Spells", "Sequence Preferences"}
+    for ti, tname in ipairs(tabNames) do
         local btn = CreateStyledFrame("Button", nil, tabRow)
         btn:SetPoint("LEFT", tabRow, "LEFT", (ti - 1) * 130, 0)
         btn:SetSize(125, 26)
@@ -5311,282 +5314,310 @@ ShowConfigureDialog = function(parent)
         lbl:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
         btn:SetScript("OnClick", function() ShowTab(ti) end)
 
+        -- ponytail: TOPLEFT only — height set after content is built
         local panel = CreateStyledFrame("Frame", nil, dialog)
-        panel:SetPoint("TOPLEFT", dialog, "TOPLEFT", WIN_PAD, -80)
-        panel:SetPoint("BOTTOMRIGHT", dialog, "BOTTOMRIGHT", -WIN_PAD, -WIN_PAD)
+        panel:SetPoint("TOPLEFT", dialog, "TOPLEFT", WIN_PAD, -PANEL_TOP)
         panel:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
         panel:SetBackdropColor(0.08, 0.08, 0.1, 0.5)
         panels[ti] = panel
+    end
 
-        if ti == 1 then
-            -- Required Spells tab (dropdown selector rows, same pattern as Suggest dialog)
-            local spellPool = {}
-            do
-                local seen = {}
-                if db.logs then
-                    for _, log in ipairs(db.logs) do
-                        if log.castCounts then
-                            for name in pairs(log.castCounts) do
-                                if not seen[name] then seen[name] = true; spellPool[#spellPool + 1] = name end
-                            end
+    -- Tab 1: Required Spells (scrollable, height set after prefs tab)
+    do
+        local panel = panels[1]
+        local spellPool = {}
+        do
+            local seen = {}
+            if db.logs then
+                for _, log in ipairs(db.logs) do
+                    if log.castCounts then
+                        for name in pairs(log.castCounts) do
+                            if not seen[name] then seen[name] = true; spellPool[#spellPool + 1] = name end
                         end
                     end
                 end
-                if db.simcData and db.simcData.castCounts then
-                    for name in pairs(db.simcData.castCounts) do
-                        if not seen[name] then seen[name] = true; spellPool[#spellPool + 1] = name end
-                    end
-                end
-                table.sort(spellPool)
             end
+            if db.simcData and db.simcData.castCounts then
+                for name in pairs(db.simcData.castCounts) do
+                    if not seen[name] then seen[name] = true; spellPool[#spellPool + 1] = name end
+                end
+            end
+            table.sort(spellPool)
+        end
 
-            local reqScroll = CreateFrame("ScrollFrame", nil, panel, "UIPanelScrollFrameTemplate")
-            reqScroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 8, -8)
-            reqScroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -8, -44)
-            local reqContainer = CreateFrame("Frame", nil, reqScroll)
-            reqContainer:SetWidth(400)
-            reqScroll:SetScrollChild(reqContainer)
+        local reqScroll = CreateFrame("ScrollFrame", nil, panel, "UIPanelScrollFrameTemplate")
+        reqScroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 8, -8)
+        reqScroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -8, -44)
+        local reqContainer = CreateFrame("Frame", nil, reqScroll)
+        reqContainer:SetWidth(400)
+        reqScroll:SetScrollChild(reqContainer)
 
-            local reqRows = {}
-            local MAX_REQ_SLOTS = 20
-            local function ReflowRowPositions(from)
-                for i = from or 1, #reqRows do
-                    local r = reqRows[i]
-                    r.row:SetPoint("TOPLEFT", reqContainer, "TOPLEFT", 0, -(i - 1) * 26)
-                end
+        local reqRows = {}
+        local MAX_REQ_SLOTS = 20
+        local function ReflowRowPositions(from)
+            for i = from or 1, #reqRows do
+                local r = reqRows[i]
+                r.row:SetPoint("TOPLEFT", reqContainer, "TOPLEFT", 0, -(i - 1) * 26)
             end
-            local function AddReqRow(spellName)
-                if #reqRows >= MAX_REQ_SLOTS then return end
-                local idx = #reqRows + 1
-                local row = CreateFrame("Frame", nil, reqContainer)
-                row:SetPoint("TOPLEFT", reqContainer, "TOPLEFT", 0, -(idx - 1) * 26)
-                row:SetPoint("RIGHT", reqContainer, "RIGHT", 0, 0)
-                row:SetHeight(26)
-                local label = row:CreateFontString(nil, "OVERLAY")
-                SafeSetFont(label, FONT, 12)
-                label:SetJustifyH("RIGHT")
-                label:SetText(tostring(idx) .. ".")
-                label:SetPoint("LEFT", row, "LEFT", 2, 0)
-                label:SetWidth(24)
-                local removeBtn
-                removeBtn = CreateStyledButton(row, "x", 24, 22, function()
-                    row:Hide()
-                    local newRows = {}
-                    for j, r2 in ipairs(reqRows) do
-                        if r2 ~= r then
-                            newRows[#newRows + 1] = r2
-                            r2.label:SetText(tostring(#newRows) .. ".")
-                        end
+        end
+        local function AddReqRow(spellName)
+            if #reqRows >= MAX_REQ_SLOTS then return end
+            local idx = #reqRows + 1
+            local row = CreateFrame("Frame", nil, reqContainer)
+            row:SetPoint("TOPLEFT", reqContainer, "TOPLEFT", 0, -(idx - 1) * 26)
+            row:SetPoint("RIGHT", reqContainer, "RIGHT", 0, 0)
+            row:SetHeight(26)
+            local label = row:CreateFontString(nil, "OVERLAY")
+            SafeSetFont(label, FONT, 12)
+            label:SetJustifyH("RIGHT")
+            label:SetText(tostring(idx) .. ".")
+            label:SetPoint("LEFT", row, "LEFT", 2, 0)
+            label:SetWidth(24)
+            local removeBtn
+            removeBtn = CreateStyledButton(row, "x", 24, 22, function()
+                row:Hide()
+                local newRows = {}
+                for j, r2 in ipairs(reqRows) do
+                    if r2 ~= r then
+                        newRows[#newRows + 1] = r2
+                        r2.label:SetText(tostring(#newRows) .. ".")
                     end
-                    reqRows = newRows
-                    ReflowRowPositions()
-                    s.requiredSpells = {}
-                    for _, r2 in ipairs(reqRows) do
-                        if r2.selection then s.requiredSpells[#s.requiredSpells + 1] = r2.selection end
-                    end
-                    db.settings = s
-                end)
-                removeBtn:SetPoint("RIGHT", row, "RIGHT", -2, 0)
-                local dropdown = CreateFrame("Frame", nil, row, "UIDropDownMenuTemplate")
-                dropdown:SetPoint("LEFT", label, "RIGHT", 6, 0)
-                dropdown:SetPoint("RIGHT", removeBtn, "LEFT", -10, 0)
-                dropdown:SetHeight(22)
-                local function InitDropdown(rec)
-                    UIDropDownMenu_SetText(dropdown, spellName or "Select...")
-                    UIDropDownMenu_Initialize(dropdown, function(self, level)
-                        for _, name in ipairs(spellPool) do
-                            local info = UIDropDownMenu_CreateInfo()
-                            info.text = name
-                            info.arg1 = name
-                            info.checked = (name == rec.selection)
-                            info.func = function(selfArg)
-                                rec.selection = selfArg.arg1
-                                UIDropDownMenu_SetText(dropdown, selfArg.arg1 or "")
-                                CloseDropDownMenus()
-                                s.requiredSpells = {}
-                                for _, row in ipairs(reqRows) do
-                                    if row.selection then s.requiredSpells[#s.requiredSpells + 1] = row.selection end
-                                end
-                                db.settings = s
-                            end
-                            UIDropDownMenu_AddButton(info)
-                        end
-                    end)
                 end
-                local r = { row = row, label = label, dropdown = dropdown, removeBtn = removeBtn, selection = spellName or nil }
-                InitDropdown(r)
-                reqRows[idx] = r
-            end
-            local addBtn = CreateStyledButton(panel, "+ Add Required Spell", 180, 24, function()
-                AddReqRow()
+                reqRows = newRows
+                ReflowRowPositions()
+                s.requiredSpells = {}
+                for _, r2 in ipairs(reqRows) do
+                    if r2.selection then s.requiredSpells[#s.requiredSpells + 1] = r2.selection end
+                end
+                db.settings = s
             end)
-            addBtn:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 8, 6)
-            -- Load existing required spells from settings
-            local loaded = s.requiredSpells or {}
-            if #loaded > 0 then DebugLog("info", "cfg-req", "Loaded: " .. table.concat(loaded, ", ")) end
-            for _, spellName in ipairs(loaded) do
-                AddReqRow(spellName)
-            end
-        elseif ti == 2 then
-            -- Sequence Preferences tab (layout-driven)
-            local y = -8
-
-            local function MakeEditBox(default, onChange)
-                local eb = CreateFrame("EditBox", nil, panel, "BackdropTemplate")
-                eb:SetSize(CTRL_W, 24)
-                eb:SetFontObject(ChatFontNormal)
-                eb:SetTextColor(1, 1, 1, 1)
-                eb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
-                eb:SetBackdropColor(0.04, 0.04, 0.06, 0.8)
-                eb:SetAutoFocus(false)
-                eb:SetText(tostring(default))
-                eb:SetScript("OnTextChanged", onChange)
-                return eb
-            end
-
-            local function MakeDropdown(options, default, onSelect)
-                local dd = CreateFrame("Frame", nil, panel, "UIDropDownMenuTemplate")
-                dd:SetSize(CTRL_W, 24)
-                UIDropDownMenu_SetText(dd, default)
-                UIDropDownMenu_Initialize(dd, function()
-                    for _, opt in ipairs(options) do
+            removeBtn:SetPoint("RIGHT", row, "RIGHT", -2, 0)
+            local dropdown = CreateFrame("Frame", nil, row, "UIDropDownMenuTemplate")
+            dropdown:SetPoint("LEFT", label, "RIGHT", 6, 0)
+            dropdown:SetPoint("RIGHT", removeBtn, "LEFT", -10, 0)
+            dropdown:SetHeight(22)
+            local function InitDropdown(rec)
+                UIDropDownMenu_SetText(dropdown, spellName or "Select...")
+                UIDropDownMenu_Initialize(dropdown, function(self, level)
+                    for _, name in ipairs(spellPool) do
                         local info = UIDropDownMenu_CreateInfo()
-                        info.text = opt
-                        info.func = function()
-                            onSelect(opt)
-                            UIDropDownMenu_SetText(dd, opt)
+                        info.text = name
+                        info.arg1 = name
+                        info.checked = (name == rec.selection)
+                        info.func = function(selfArg)
+                            rec.selection = selfArg.arg1
+                            UIDropDownMenu_SetText(dropdown, selfArg.arg1 or "")
                             CloseDropDownMenus()
+                            s.requiredSpells = {}
+                            for _, row in ipairs(reqRows) do
+                                if row.selection then s.requiredSpells[#s.requiredSpells + 1] = row.selection end
+                            end
+                            db.settings = s
                         end
                         UIDropDownMenu_AddButton(info)
                     end
                 end)
-                UIDropDownMenu_SetWidth(dd, CTRL_W, 0)
-                return dd
             end
-
-            local function MakeCheckbox(initial, onToggle)
-                local cb = CreateStyledFrame("Button", nil, panel)
-                cb:SetSize(16, 16)
-                cb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
-                local val = initial
-                cb:SetBackdropColor(val and 0.2 or 0.05, val and 0.8 or 0.05, val and 0.2 or 0.05, 0.9)
-                cb:SetScript("OnClick", function()
-                    val = not val
-                    onToggle(val)
-                    cb:SetBackdropColor(val and 0.2 or 0.05, val and 0.8 or 0.05, val and 0.2 or 0.05, 0.9)
-                end)
-                return cb
-            end
-
-            local function AddLabel(text)
-                local lbl = panel:CreateFontString(nil, "OVERLAY")
-                SafeSetFont(lbl, FONT, 11)
-                lbl:SetPoint("TOPLEFT", panel, "TOPLEFT", LABEL_X, y)
-                lbl:SetText(text)
-                lbl:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
-                lbl:SetJustifyH("LEFT")
-            end
-
-            -- Row 1: Max consecutive repeats
-            AddLabel("Max consecutive repeats (0=unlimited):")
-            MakeEditBox(s.maxRepeats or 3, function(eb)
-                local v = tonumber(eb:GetText()); if v and v >= 0 then s.maxRepeats = v else s.maxRepeats = 0 end
-            end):SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
-            y = y - ROW_H
-
-            -- Row 2: Interleave steps
-            AddLabel("Min Interleave Steps (0=off):")
-            MakeEditBox(s.interleave or 0, function(eb)
-                local v = tonumber(eb:GetText()); if v and v >= 0 then s.interleave = v else s.interleave = 0 end
-            end):SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
-            y = y - ROW_H
-
-            -- Row 3: Min copies per spell
-            AddLabel("Min copies per spell:")
-            MakeEditBox(s.minCopies or 1, function(eb)
-                local v = tonumber(eb:GetText()); if v and v >= 0 then s.minCopies = v else s.minCopies = 1 end
-            end):SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
-            y = y - ROW_H
-
-            -- Row 4: Step Function dropdown
-            AddLabel("Step Function:")
-            MakeDropdown({"Priority", "Sequential", "Random", "ReversePriority"}, s.stepFunction or "Priority", function(opt)
-                s.stepFunction = opt
-            end):SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
-            y = y - ROW_H
-
-            -- Row 5: Auto-push checkbox (extra height for hint)
-            AddLabel("Auto-push to GRIP-EMS on Best Sequence:")
-            local apCb = MakeCheckbox(s.autoPush or false, function(val) s.autoPush = val end)
-            apCb:SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 2)
-            local apHint = panel:CreateFontString(nil, "OVERLAY")
-            SafeSetFont(apHint, FONT, 9)
-            apHint:SetPoint("LEFT", apCb, "RIGHT", 6, 0)
-            apHint:SetText("Auto-push when Best Sequence is generated")
-            apHint:SetTextColor(C.text[1], C.text[2], C.text[3], 0.5)
-            y = y - 36
-
-            -- Row 6: KeyPress macro
-            AddLabel("KeyPress macro:")
-            MakeEditBox(s.keyPress or "/startattack", function(eb) s.keyPress = eb:GetText() end)
-                :SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
-            y = y - ROW_H
-
-            -- Row 7: KeyRelease macro
-            AddLabel("KeyRelease macro:")
-            MakeEditBox(s.keyRelease or "", function(eb) s.keyRelease = eb:GetText() end)
-                :SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
-            y = y - ROW_H
-
-            -- Row 8: Reset on checkboxes (4 columns at CHK_GAP spacing)
-            AddLabel("Reset on:")
-            local resetDefs = {
-                {key = "resetOnCombat", label = "Combat", default = true},
-                {key = "resetOnTarget", label = "Target", default = true},
-                {key = "resetOnGear",   label = "Gear",   default = false},
-                {key = "resetOnSpec",   label = "Spec",   default = false},
-            }
-            for ri, rd in ipairs(resetDefs) do
-                local val = (s[rd.key] ~= nil) and s[rd.key] or rd.default
-                s[rd.key] = val
-                local cb = MakeCheckbox(val, function(v) s[rd.key] = v end)
-                cb:SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X + (ri - 1) * CHK_GAP, y - 1)
-                local clbl = panel:CreateFontString(nil, "OVERLAY")
-                SafeSetFont(clbl, FONT, 11)
-                clbl:SetPoint("LEFT", cb, "RIGHT", 4, 0)
-                clbl:SetText(rd.label)
-                clbl:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
-            end
-            y = y - ROW_H
-
-            -- Row 9: Reset timer
-            AddLabel("Reset timer (sec, 0=off):")
-            MakeEditBox(s.resetTimer or 0, function(eb)
-                local v = tonumber(eb:GetText()); if v and v >= 0 then s.resetTimer = v else s.resetTimer = 0 end
-            end):SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
-            y = y - ROW_H
-
-            -- Row 10: Repeat count
-            AddLabel("Repeat count (0=no wrap):")
-            MakeEditBox(s.repeatCount or 0, function(eb)
-                local v = tonumber(eb:GetText()); if v and v >= 0 then s.repeatCount = v else s.repeatCount = 0 end
-            end):SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
-            y = y - ROW_H
-
-            -- Row 11: Privacy Mode dropdown
-            AddLabel("Privacy Mode:")
-            MakeDropdown({"private", "public", "pseudonymous"}, s.privacyMode or "private", function(opt)
-                s.privacyMode = opt
-            end):SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
-            y = y - ROW_H
-
-            -- Save button (centered at panel bottom)
-            local saveBtn = CreateStyledButton(panel, "Save Preferences", BTN_W, BTN_H, function()
-                db.settings = s
-                print("|cff33ff33[DummyAnalyzer]|r Preferences saved.")
-            end)
-            saveBtn:SetPoint("BOTTOM", panel, "BOTTOM", 0, 8)
+            local r = { row = row, label = label, dropdown = dropdown, removeBtn = removeBtn, selection = spellName or nil }
+            InitDropdown(r)
+            reqRows[idx] = r
         end
+        local addBtn = CreateStyledButton(panel, "+ Add Required Spell", 180, 24, function()
+            AddReqRow()
+        end)
+        addBtn:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 8, 6)
+        local loaded = s.requiredSpells or {}
+        if #loaded > 0 then DebugLog("info", "cfg-req", "Loaded: " .. table.concat(loaded, ", ")) end
+        for _, spellName in ipairs(loaded) do
+            AddReqRow(spellName)
+        end
+    end
+
+    -- Tab 2: Sequence Preferences (layout-driven — currentY tracks content depth)
+    do
+        local panel = panels[2]
+        local currentY = 8 -- top padding inside panel
+
+        local function MakeEditBox(default, onChange)
+            local eb = CreateFrame("EditBox", nil, panel, "BackdropTemplate")
+            eb:SetSize(CTRL_W, 24)
+            eb:SetFontObject(ChatFontNormal)
+            eb:SetTextColor(1, 1, 1, 1)
+            eb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
+            eb:SetBackdropColor(0.04, 0.04, 0.06, 0.8)
+            eb:SetAutoFocus(false)
+            eb:SetText(tostring(default))
+            eb:SetScript("OnTextChanged", onChange)
+            return eb
+        end
+
+        local function MakeDropdown(options, default, onSelect)
+            local dd = CreateFrame("Frame", nil, panel, "UIDropDownMenuTemplate")
+            UIDropDownMenu_SetText(dd, default)
+            UIDropDownMenu_Initialize(dd, function()
+                for _, opt in ipairs(options) do
+                    local info = UIDropDownMenu_CreateInfo()
+                    info.text = opt
+                    info.func = function()
+                        onSelect(opt)
+                        UIDropDownMenu_SetText(dd, opt)
+                        CloseDropDownMenus()
+                    end
+                    UIDropDownMenu_AddButton(info)
+                end
+            end)
+            UIDropDownMenu_SetWidth(dd, CTRL_W, 0)
+            return dd
+        end
+
+        local function MakeCheckbox(initial, onToggle)
+            local cb = CreateStyledFrame("Button", nil, panel)
+            cb:SetSize(16, 16)
+            cb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
+            local val = initial
+            cb:SetBackdropColor(val and 0.2 or 0.05, val and 0.8 or 0.05, val and 0.2 or 0.05, 0.9)
+            cb:SetScript("OnClick", function()
+                val = not val
+                onToggle(val)
+                cb:SetBackdropColor(val and 0.2 or 0.05, val and 0.8 or 0.05, val and 0.2 or 0.05, 0.9)
+            end)
+            return cb
+        end
+
+        -- ponytail: every row goes through PlaceLabel → Place* → advance currentY
+        local function PlaceLabel(text)
+            local lbl = panel:CreateFontString(nil, "OVERLAY")
+            SafeSetFont(lbl, FONT, 11)
+            lbl:SetPoint("TOPLEFT", panel, "TOPLEFT", LABEL_X, -currentY)
+            lbl:SetText(text)
+            lbl:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
+            lbl:SetJustifyH("LEFT")
+            return lbl
+        end
+
+        local function PlaceEdit(default, onChange)
+            local eb = MakeEditBox(default, onChange)
+            eb:SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, -(currentY + 4))
+            return eb
+        end
+
+        local function PlaceDropdown(options, default, onSelect)
+            local dd = MakeDropdown(options, default, onSelect)
+            dd:SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, -(currentY + 4))
+            return dd
+        end
+
+        local function PlaceCheckbox(initial, onToggle)
+            local cb = MakeCheckbox(initial, onToggle)
+            cb:SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, -(currentY + 1))
+            return cb
+        end
+
+        -- Row 1
+        PlaceLabel("Max consecutive repeats (0=unlimited):")
+        PlaceEdit(s.maxRepeats or 3, function(eb)
+            local v = tonumber(eb:GetText()); if v and v >= 0 then s.maxRepeats = v else s.maxRepeats = 0 end
+        end)
+        currentY = currentY + ROW_H
+
+        -- Row 2
+        PlaceLabel("Min Interleave Steps (0=off):")
+        PlaceEdit(s.interleave or 0, function(eb)
+            local v = tonumber(eb:GetText()); if v and v >= 0 then s.interleave = v else s.interleave = 0 end
+        end)
+        currentY = currentY + ROW_H
+
+        -- Row 3
+        PlaceLabel("Min copies per spell:")
+        PlaceEdit(s.minCopies or 1, function(eb)
+            local v = tonumber(eb:GetText()); if v and v >= 0 then s.minCopies = v else s.minCopies = 1 end
+        end)
+        currentY = currentY + ROW_H
+
+        -- Row 4
+        PlaceLabel("Step Function:")
+        PlaceDropdown({"Priority", "Sequential", "Random", "ReversePriority"}, s.stepFunction or "Priority", function(opt)
+            s.stepFunction = opt
+        end)
+        currentY = currentY + ROW_H
+
+        -- Row 5: checkbox + hint text
+        PlaceLabel("Auto-push to GRIP-EMS:")
+        local apCb = PlaceCheckbox(s.autoPush or false, function(val) s.autoPush = val end)
+        local apHint = panel:CreateFontString(nil, "OVERLAY")
+        SafeSetFont(apHint, FONT, 9)
+        apHint:SetPoint("LEFT", apCb, "RIGHT", 6, 0)
+        apHint:SetText("Auto-push when Best Sequence is generated")
+        apHint:SetTextColor(C.text[1], C.text[2], C.text[3], 0.5)
+        currentY = currentY + ROW_H
+
+        -- Row 6
+        PlaceLabel("KeyPress macro:")
+        PlaceEdit(s.keyPress or "/startattack", function(eb) s.keyPress = eb:GetText() end)
+        currentY = currentY + ROW_H
+
+        -- Row 7
+        PlaceLabel("KeyRelease macro:")
+        PlaceEdit(s.keyRelease or "", function(eb) s.keyRelease = eb:GetText() end)
+        currentY = currentY + ROW_H
+
+        -- Row 8: Reset On — checkboxes equally spaced across available width
+        PlaceLabel("Reset on:")
+        local resetDefs = {
+            {key = "resetOnCombat", label = "Combat", default = true},
+            {key = "resetOnTarget", label = "Target", default = true},
+            {key = "resetOnGear",   label = "Gear",   default = false},
+            {key = "resetOnSpec",   label = "Spec",   default = false},
+        }
+        local resetSlotW = (PANEL_INNER_W - CTRL_X) / #resetDefs
+        for ri, rd in ipairs(resetDefs) do
+            local val = (s[rd.key] ~= nil) and s[rd.key] or rd.default
+            s[rd.key] = val
+            local cb = MakeCheckbox(val, function(v) s[rd.key] = v end)
+            cb:SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X + (ri - 1) * resetSlotW, -(currentY + 1))
+            local clbl = panel:CreateFontString(nil, "OVERLAY")
+            SafeSetFont(clbl, FONT, 11)
+            clbl:SetPoint("LEFT", cb, "RIGHT", 4, 0)
+            clbl:SetText(rd.label)
+            clbl:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
+        end
+        currentY = currentY + ROW_H
+
+        -- Row 9
+        PlaceLabel("Reset timer (sec, 0=off):")
+        PlaceEdit(s.resetTimer or 0, function(eb)
+            local v = tonumber(eb:GetText()); if v and v >= 0 then s.resetTimer = v else s.resetTimer = 0 end
+        end)
+        currentY = currentY + ROW_H
+
+        -- Row 10
+        PlaceLabel("Repeat count (0=no wrap):")
+        PlaceEdit(s.repeatCount or 0, function(eb)
+            local v = tonumber(eb:GetText()); if v and v >= 0 then s.repeatCount = v else s.repeatCount = 0 end
+        end)
+        currentY = currentY + ROW_H
+
+        -- Row 11
+        PlaceLabel("Privacy Mode:")
+        PlaceDropdown({"private", "public", "pseudonymous"}, s.privacyMode or "private", function(opt)
+            s.privacyMode = opt
+        end)
+        currentY = currentY + ROW_H
+
+        -- Save button: placed after content, centered horizontally
+        currentY = currentY + 16 -- gap above
+        local saveBtn = CreateStyledButton(panel, "Save Preferences", BTN_W, BTN_H, function()
+            db.settings = s
+            print("|cff33ff33[DummyAnalyzer]|r Preferences saved.")
+        end)
+        saveBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", (PANEL_INNER_W - BTN_W) / 2, -currentY)
+        currentY = currentY + BTN_H + 16 -- gap below
+
+        -- ponytail: resize panel and dialog from content depth — no hardcoded height
+        local panelH = currentY + 8
+        panel:SetHeight(panelH)
+        panels[1]:SetHeight(panelH)
+        dialog:SetHeight(PANEL_TOP + panelH + WIN_PAD)
     end
 
     ShowTab(1)
