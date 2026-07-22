@@ -5314,9 +5314,9 @@ ShowConfigureDialog = function(parent)
         lbl:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
         btn:SetScript("OnClick", function() ShowTab(ti) end)
 
-        -- ponytail: TOPLEFT only — height set after content is built
         local panel = CreateStyledFrame("Frame", nil, dialog)
         panel:SetPoint("TOPLEFT", dialog, "TOPLEFT", WIN_PAD, -PANEL_TOP)
+        panel:SetSize(PANEL_INNER_W, 400) -- temporary — resized after content
         panel:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
         panel:SetBackdropColor(0.08, 0.08, 0.1, 0.5)
         panels[ti] = panel
