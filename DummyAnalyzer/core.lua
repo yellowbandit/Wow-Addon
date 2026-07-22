@@ -6307,18 +6307,22 @@ end
 local pushBtn = CreateStyledButton(bottomRow, "Push to GRIP-EMS", 170, 32, function()
           print("|cff33ff33[DummyAnalyzer EMS]|r Push to GRIP-EMS clicked. Resolving order...")
           local steps = nil
-          local db2 = GetCharDB()
-          if db2 and db2.bestSequence and type(db2.bestSequence.fullSteps) == "table" and #db2.bestSequence.fullSteps > 0 then
-              steps = db2.bestSequence.fullSteps
-              print("|cffffff00[DummyAnalyzer EMS]|r Cache hit: fullSteps len=" .. #steps)
-          elseif seqText and seqText ~= "" then
+          -- Ponytail: use current seqText first (always matches what's displayed),
+          -- fall back to saved bestSequence.fullSteps, then raw editBox text.
+          if seqText and seqText ~= "" then
               steps = ExtractAllSteps(seqText)
               print("|cffffff00[DummyAnalyzer EMS]|r From seqText, len=" .. #steps)
           else
-              local editText = editBox and editBox:GetText() or ""
-              if type(editText) == "string" and editText ~= "" then
-                  steps = ExtractAllSteps(editText)
-                  print("|cffffff00[DummyAnalyzer EMS]|r From editBox, len=" .. (#steps or 0))
+              local db2 = GetCharDB()
+              if db2 and db2.bestSequence and type(db2.bestSequence.fullSteps) == "table" and #db2.bestSequence.fullSteps > 0 then
+                  steps = db2.bestSequence.fullSteps
+                  print("|cffffff00[DummyAnalyzer EMS]|r Cache fallback: fullSteps len=" .. #steps)
+              elseif editBox then
+                  local editText = editBox:GetText() or ""
+                  if editText ~= "" then
+                      steps = ExtractAllSteps(editText)
+                      print("|cffffff00[DummyAnalyzer EMS]|r From editBox, len=" .. (#steps or 0))
+                  end
               end
           end
           if not steps or #steps == 0 then
@@ -7839,9 +7843,15 @@ function Ems_PushBestSequence(orderedSteps)
     local ctx = emsContextCache or "none"
     local name = "DummyAnalyzer > Best (" .. ctx .. ")"
     local seqData = Ems_BuildSequenceData(name, orderedSteps)
-    local ok, reason = emsPluginHandle:CreateSequence(name, seqData)
-    if not ok and debugMode then
-        print("|cffff8844[DummyAnalyzer EMS]|r CreateSequence failed: " .. tostring(reason))
+    -- Try UpdateSequence first (overwrites existing), fall back to CreateSequence
+    local ok, reason = emsPluginHandle:UpdateSequence(name, seqData)
+    if ok then
+        if debugMode then print("|cff33ff33[DummyAnalyzer EMS]|r UpdateSequence OK: " .. name) end
+    else
+        ok, reason = emsPluginHandle:CreateSequence(name, seqData)
+        if not ok and debugMode then
+            print("|cffff8844[DummyAnalyzer EMS]|r CreateSequence failed: " .. tostring(reason))
+        end
     end
     return name
 end
