@@ -5241,8 +5241,18 @@ ShowConfigureDialog = function(parent)
     if not db.settings then db.settings = {} end
     local s = db.settings
 
+    -- Layout constants
+    local WIN_W, WIN_H, WIN_PAD = 560, 540, 20
+    local ROW_H    = 30
+    local LABEL_X  = 16
+    local CTRL_X   = 280
+    local CTRL_W   = 150
+    local CHK_GAP  = 62
+    local BTN_W    = 170
+    local BTN_H    = 28
+
     local dialog = CreateStyledFrame("Frame", nil, UIParent); trackDialog(dialog)
-    dialog:SetSize(480, 520)
+    dialog:SetSize(560, 540)
     dialog:SetPoint("CENTER")
     ApplyBackdrop(dialog, false)
     dialog:SetFrameLevel((parent or UIParent):GetFrameLevel() + 10)
@@ -5273,8 +5283,8 @@ ShowConfigureDialog = function(parent)
     closeX:SetScript("OnClick", function() dialog:Hide(); if parent and parent ~= UIParent and parent.Show then parent:Show() end end)
 
     local tabRow = CreateFrame("Frame", nil, dialog)
-    tabRow:SetPoint("TOPLEFT", dialog, "TOPLEFT", 20, -42)
-    tabRow:SetPoint("TOPRIGHT", dialog, "TOPRIGHT", -20, -42)
+    tabRow:SetPoint("TOPLEFT", dialog, "TOPLEFT", WIN_PAD, -42)
+    tabRow:SetPoint("TOPRIGHT", dialog, "TOPRIGHT", -WIN_PAD, -42)
     tabRow:SetHeight(28)
 
     local panels = {}
@@ -5302,8 +5312,8 @@ ShowConfigureDialog = function(parent)
         btn:SetScript("OnClick", function() ShowTab(ti) end)
 
         local panel = CreateStyledFrame("Frame", nil, dialog)
-        panel:SetPoint("TOPLEFT", dialog, "TOPLEFT", 20, -80)
-        panel:SetPoint("BOTTOMRIGHT", dialog, "BOTTOMRIGHT", -20, -50)
+        panel:SetPoint("TOPLEFT", dialog, "TOPLEFT", WIN_PAD, -80)
+        panel:SetPoint("BOTTOMRIGHT", dialog, "BOTTOMRIGHT", -WIN_PAD, -WIN_PAD)
         panel:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
         panel:SetBackdropColor(0.08, 0.08, 0.1, 0.5)
         panels[ti] = panel
@@ -5418,155 +5428,118 @@ ShowConfigureDialog = function(parent)
                 AddReqRow(spellName)
             end
         elseif ti == 2 then
-            -- Sequence Preferences tab
+            -- Sequence Preferences tab (layout-driven)
             local y = -8
-            local function AddLabeledControl(label, controlFn)
-                local lbl = panel:CreateFontString(nil, "OVERLAY")
-                SafeSetFont(lbl, FONT, 11)
-                lbl:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, y)
-                lbl:SetText(label)
-                lbl:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
-                lbl:SetJustifyH("LEFT")
-                local ctrl = controlFn(panel)
-                ctrl:SetPoint("TOPLEFT", panel, "TOPLEFT", 260, y - 4)
-                y = y - 32
-                return ctrl
+
+            local function MakeEditBox(default, onChange)
+                local eb = CreateFrame("EditBox", nil, panel, "BackdropTemplate")
+                eb:SetSize(CTRL_W, 24)
+                eb:SetFontObject(ChatFontNormal)
+                eb:SetTextColor(1, 1, 1, 1)
+                eb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
+                eb:SetBackdropColor(0.04, 0.04, 0.06, 0.8)
+                eb:SetAutoFocus(false)
+                eb:SetText(tostring(default))
+                eb:SetScript("OnTextChanged", onChange)
+                return eb
             end
 
-            -- Max consecutive repeats
-            local repeatCtrl = AddLabeledControl("Max consecutive repeats (0=unlimited):", function(p)
-                local eb = CreateFrame("EditBox", nil, p, "BackdropTemplate")
-                eb:SetSize(140, 24)
-                eb:SetFontObject(ChatFontNormal)
-                eb:SetTextColor(1, 1, 1, 1)
-                eb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
-                eb:SetBackdropColor(0.04, 0.04, 0.06, 0.8)
-                eb:SetAutoFocus(false)
-                eb:SetText(tostring(s.maxRepeats or 3))
-                eb:SetScript("OnTextChanged", function()
-                    local v = tonumber(eb:GetText())
-                    if v and v >= 0 then s.maxRepeats = v else s.maxRepeats = 0 end
-                end)
-                return eb
-            end)
-
-            -- Interleave steps (minimum count, 0 = disabled)
-            local interleaveCtrl = AddLabeledControl("Min Interleave Steps (0=off):", function(p)
-                local eb = CreateFrame("EditBox", nil, p, "BackdropTemplate")
-                eb:SetSize(140, 24)
-                eb:SetFontObject(ChatFontNormal)
-                eb:SetTextColor(1, 1, 1, 1)
-                eb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
-                eb:SetBackdropColor(0.04, 0.04, 0.06, 0.8)
-                eb:SetAutoFocus(false)
-                eb:SetText(tostring(s.interleave or 0))
-                eb:SetScript("OnTextChanged", function()
-                    local v = tonumber(eb:GetText())
-                    if v and v >= 0 then s.interleave = v else s.interleave = 0 end
-                end)
-                return eb
-            end)
-
-            -- Min copies per spell
-            local minCtrl = AddLabeledControl("Min copies per spell:", function(p)
-                local eb = CreateFrame("EditBox", nil, p, "BackdropTemplate")
-                eb:SetSize(140, 24)
-                eb:SetFontObject(ChatFontNormal)
-                eb:SetTextColor(1, 1, 1, 1)
-                eb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
-                eb:SetBackdropColor(0.04, 0.04, 0.06, 0.8)
-                eb:SetAutoFocus(false)
-                eb:SetText(tostring(s.minCopies or 1))
-                eb:SetScript("OnTextChanged", function()
-                    local v = tonumber(eb:GetText())
-                    if v and v >= 0 then s.minCopies = v else s.minCopies = 1 end
-                end)
-                return eb
-            end)
-
-            -- Step function dropdown
-            local sfLabel = panel:CreateFontString(nil, "OVERLAY")
-            SafeSetFont(sfLabel, FONT, 11)
-            sfLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, y)
-            sfLabel:SetText("Step Function:")
-            sfLabel:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
-            local sfDropdown = CreateFrame("Frame", nil, panel, "UIDropDownMenuTemplate")
-            sfDropdown:SetSize(140, 24)
-            sfDropdown:SetPoint("TOPLEFT", panel, "TOPLEFT", 260, y - 4)
-            local sfOptions = {"Priority", "Sequential", "Random", "ReversePriority"}
-            local sfSel = s.stepFunction or "Priority"
-            UIDropDownMenu_SetText(sfDropdown, sfSel)
-            UIDropDownMenu_Initialize(sfDropdown, function(self, level)
-                for _, opt in ipairs(sfOptions) do
-                    local info = UIDropDownMenu_CreateInfo()
-                    info.text = opt
-                    info.func = function()
-                        s.stepFunction = opt
-                        UIDropDownMenu_SetText(sfDropdown, opt)
-                        CloseDropDownMenus()
+            local function MakeDropdown(options, default, onSelect)
+                local dd = CreateFrame("Frame", nil, panel, "UIDropDownMenuTemplate")
+                dd:SetSize(CTRL_W, 24)
+                UIDropDownMenu_SetText(dd, default)
+                UIDropDownMenu_Initialize(dd, function()
+                    for _, opt in ipairs(options) do
+                        local info = UIDropDownMenu_CreateInfo()
+                        info.text = opt
+                        info.func = function()
+                            onSelect(opt)
+                            UIDropDownMenu_SetText(dd, opt)
+                            CloseDropDownMenus()
+                        end
+                        UIDropDownMenu_AddButton(info)
                     end
-                    UIDropDownMenu_AddButton(info)
-                end
-            end)
-            UIDropDownMenu_SetWidth(sfDropdown, 140, 0)
-            y = y - 32
+                end)
+                UIDropDownMenu_SetWidth(dd, CTRL_W, 0)
+                return dd
+            end
 
-            -- Auto-push checkbox
-            local apLabel = panel:CreateFontString(nil, "OVERLAY")
-            SafeSetFont(apLabel, FONT, 11)
-            apLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, y)
-            apLabel:SetText("Auto-push to GRIP-EMS on Best Sequence:")
-            apLabel:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
-            local apBtn = CreateStyledFrame("Button", nil, panel)
-            apBtn:SetSize(18, 18)
-            apBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", 260, y - 2)
-            apBtn:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
-            apBtn:SetBackdropColor(s.autoPush and 0.2 or 0.05, s.autoPush and 0.8 or 0.05, s.autoPush and 0.2 or 0.05, 0.9)
-            apBtn:SetScript("OnClick", function()
-                s.autoPush = not s.autoPush
-                apBtn:SetBackdropColor(s.autoPush and 0.2 or 0.05, s.autoPush and 0.8 or 0.05, s.autoPush and 0.2 or 0.05, 0.9)
-            end)
+            local function MakeCheckbox(initial, onToggle)
+                local cb = CreateStyledFrame("Button", nil, panel)
+                cb:SetSize(16, 16)
+                cb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
+                local val = initial
+                cb:SetBackdropColor(val and 0.2 or 0.05, val and 0.8 or 0.05, val and 0.2 or 0.05, 0.9)
+                cb:SetScript("OnClick", function()
+                    val = not val
+                    onToggle(val)
+                    cb:SetBackdropColor(val and 0.2 or 0.05, val and 0.8 or 0.05, val and 0.2 or 0.05, 0.9)
+                end)
+                return cb
+            end
+
+            local function AddLabel(text)
+                local lbl = panel:CreateFontString(nil, "OVERLAY")
+                SafeSetFont(lbl, FONT, 11)
+                lbl:SetPoint("TOPLEFT", panel, "TOPLEFT", LABEL_X, y)
+                lbl:SetText(text)
+                lbl:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
+                lbl:SetJustifyH("LEFT")
+            end
+
+            -- Row 1: Max consecutive repeats
+            AddLabel("Max consecutive repeats (0=unlimited):")
+            MakeEditBox(s.maxRepeats or 3, function(eb)
+                local v = tonumber(eb:GetText()); if v and v >= 0 then s.maxRepeats = v else s.maxRepeats = 0 end
+            end):SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
+            y = y - ROW_H
+
+            -- Row 2: Interleave steps
+            AddLabel("Min Interleave Steps (0=off):")
+            MakeEditBox(s.interleave or 0, function(eb)
+                local v = tonumber(eb:GetText()); if v and v >= 0 then s.interleave = v else s.interleave = 0 end
+            end):SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
+            y = y - ROW_H
+
+            -- Row 3: Min copies per spell
+            AddLabel("Min copies per spell:")
+            MakeEditBox(s.minCopies or 1, function(eb)
+                local v = tonumber(eb:GetText()); if v and v >= 0 then s.minCopies = v else s.minCopies = 1 end
+            end):SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
+            y = y - ROW_H
+
+            -- Row 4: Step Function dropdown
+            AddLabel("Step Function:")
+            MakeDropdown({"Priority", "Sequential", "Random", "ReversePriority"}, s.stepFunction or "Priority", function(opt)
+                s.stepFunction = opt
+            end):SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
+            y = y - ROW_H
+
+            -- Row 5: Auto-push checkbox (extra height for hint)
+            AddLabel("Auto-push to GRIP-EMS on Best Sequence:")
+            local apCb = MakeCheckbox(s.autoPush or false, function(val) s.autoPush = val end)
+            apCb:SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 2)
             local apHint = panel:CreateFontString(nil, "OVERLAY")
             SafeSetFont(apHint, FONT, 9)
-            apHint:SetPoint("LEFT", apBtn, "RIGHT", 6, 0)
+            apHint:SetPoint("LEFT", apCb, "RIGHT", 6, 0)
             apHint:SetText("Auto-push when Best Sequence is generated")
             apHint:SetTextColor(C.text[1], C.text[2], C.text[3], 0.5)
             y = y - 36
 
-            -- KeyPress edit
-            AddLabeledControl("KeyPress macro:", function(p)
-                local eb = CreateFrame("EditBox", nil, p, "BackdropTemplate")
-                eb:SetSize(140, 24)
-                eb:SetFontObject(ChatFontNormal)
-                eb:SetTextColor(1, 1, 1, 1)
-                eb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
-                eb:SetBackdropColor(0.04, 0.04, 0.06, 0.8)
-                eb:SetAutoFocus(false)
-                eb:SetText(tostring(s.keyPress or "/startattack"))
-                eb:SetScript("OnTextChanged", function() s.keyPress = eb:GetText() end)
-                return eb
-            end)
+            -- Row 6: KeyPress macro
+            AddLabel("KeyPress macro:")
+            MakeEditBox(s.keyPress or "/startattack", function(eb) s.keyPress = eb:GetText() end)
+                :SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
+            y = y - ROW_H
 
-            -- KeyRelease edit
-            AddLabeledControl("KeyRelease macro:", function(p)
-                local eb = CreateFrame("EditBox", nil, p, "BackdropTemplate")
-                eb:SetSize(140, 24)
-                eb:SetFontObject(ChatFontNormal)
-                eb:SetTextColor(1, 1, 1, 1)
-                eb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
-                eb:SetBackdropColor(0.04, 0.04, 0.06, 0.8)
-                eb:SetAutoFocus(false)
-                eb:SetText(tostring(s.keyRelease or ""))
-                eb:SetScript("OnTextChanged", function() s.keyRelease = eb:GetText() end)
-                return eb
-            end)
+            -- Row 7: KeyRelease macro
+            AddLabel("KeyRelease macro:")
+            MakeEditBox(s.keyRelease or "", function(eb) s.keyRelease = eb:GetText() end)
+                :SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
+            y = y - ROW_H
 
-            -- Reset condition checkboxes
-            local resetLabel = panel:CreateFontString(nil, "OVERLAY")
-            SafeSetFont(resetLabel, FONT, 11)
-            resetLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, y)
-            resetLabel:SetText("Reset on:")
-            resetLabel:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
+            -- Row 8: Reset on checkboxes (4 columns at CHK_GAP spacing)
+            AddLabel("Reset on:")
             local resetDefs = {
                 {key = "resetOnCombat", label = "Combat", default = true},
                 {key = "resetOnTarget", label = "Target", default = true},
@@ -5574,92 +5547,45 @@ ShowConfigureDialog = function(parent)
                 {key = "resetOnSpec",   label = "Spec",   default = false},
             }
             for ri, rd in ipairs(resetDefs) do
-                local cb = CreateStyledFrame("Button", nil, panel)
-                cb:SetSize(16, 16)
-                cb:SetPoint("TOPLEFT", panel, "TOPLEFT", 260 + (ri - 1) * 75, y - 1)
-                cb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
                 local val = (s[rd.key] ~= nil) and s[rd.key] or rd.default
                 s[rd.key] = val
-                cb:SetBackdropColor(val and 0.2 or 0.05, val and 0.8 or 0.05, val and 0.2 or 0.05, 0.9)
+                local cb = MakeCheckbox(val, function(v) s[rd.key] = v end)
+                cb:SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X + (ri - 1) * CHK_GAP, y - 1)
                 local clbl = panel:CreateFontString(nil, "OVERLAY")
                 SafeSetFont(clbl, FONT, 11)
                 clbl:SetPoint("LEFT", cb, "RIGHT", 4, 0)
                 clbl:SetText(rd.label)
                 clbl:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
-                cb:SetScript("OnClick", function()
-                    s[rd.key] = not s[rd.key]
-                    cb:SetBackdropColor(s[rd.key] and 0.2 or 0.05, s[rd.key] and 0.8 or 0.05, s[rd.key] and 0.2 or 0.05, 0.9)
-                end)
             end
-            y = y - 32
+            y = y - ROW_H
 
-            -- Reset timer edit
-            AddLabeledControl("Reset timer (sec, 0=off):", function(p)
-                local eb = CreateFrame("EditBox", nil, p, "BackdropTemplate")
-                eb:SetSize(140, 24)
-                eb:SetFontObject(ChatFontNormal)
-                eb:SetTextColor(1, 1, 1, 1)
-                eb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
-                eb:SetBackdropColor(0.04, 0.04, 0.06, 0.8)
-                eb:SetAutoFocus(false)
-                eb:SetText(tostring(s.resetTimer or 0))
-                eb:SetScript("OnTextChanged", function()
-                    local v = tonumber(eb:GetText())
-                    if v and v >= 0 then s.resetTimer = v else s.resetTimer = 0 end
-                end)
-                return eb
-            end)
+            -- Row 9: Reset timer
+            AddLabel("Reset timer (sec, 0=off):")
+            MakeEditBox(s.resetTimer or 0, function(eb)
+                local v = tonumber(eb:GetText()); if v and v >= 0 then s.resetTimer = v else s.resetTimer = 0 end
+            end):SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
+            y = y - ROW_H
 
-            -- Repeat count edit
-            AddLabeledControl("Repeat count (0=no wrap):", function(p)
-                local eb = CreateFrame("EditBox", nil, p, "BackdropTemplate")
-                eb:SetSize(140, 24)
-                eb:SetFontObject(ChatFontNormal)
-                eb:SetTextColor(1, 1, 1, 1)
-                eb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
-                eb:SetBackdropColor(0.04, 0.04, 0.06, 0.8)
-                eb:SetAutoFocus(false)
-                eb:SetText(tostring(s.repeatCount or 0))
-                eb:SetScript("OnTextChanged", function()
-                    local v = tonumber(eb:GetText())
-                    if v and v >= 0 then s.repeatCount = v else s.repeatCount = 0 end
-                end)
-                return eb
-            end)
+            -- Row 10: Repeat count
+            AddLabel("Repeat count (0=no wrap):")
+            MakeEditBox(s.repeatCount or 0, function(eb)
+                local v = tonumber(eb:GetText()); if v and v >= 0 then s.repeatCount = v else s.repeatCount = 0 end
+            end):SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
+            y = y - ROW_H
 
-            -- Privacy mode dropdown
-            local pmLabel = panel:CreateFontString(nil, "OVERLAY")
-            SafeSetFont(pmLabel, FONT, 11)
-            pmLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, y)
-            pmLabel:SetText("Privacy Mode:")
-            pmLabel:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
-            local pmDropdown = CreateFrame("Frame", nil, panel, "UIDropDownMenuTemplate")
-            pmDropdown:SetSize(140, 24)
-            pmDropdown:SetPoint("TOPLEFT", panel, "TOPLEFT", 260, y - 4)
-            local pmOptions = {"private", "public", "pseudonymous"}
-            local pmSel = s.privacyMode or "private"
-            UIDropDownMenu_SetText(pmDropdown, pmSel)
-            UIDropDownMenu_Initialize(pmDropdown, function(self, level)
-                for _, opt in ipairs(pmOptions) do
-                    local info = UIDropDownMenu_CreateInfo()
-                    info.text = opt
-                    info.func = function()
-                        s.privacyMode = opt
-                        UIDropDownMenu_SetText(pmDropdown, opt)
-                        CloseDropDownMenus()
-                    end
-                    UIDropDownMenu_AddButton(info)
-                end
-            end)
-            UIDropDownMenu_SetWidth(pmDropdown, 140, 0)
-            y = y - 32
+            -- Row 11: Privacy Mode dropdown
+            AddLabel("Privacy Mode:")
+            MakeDropdown({"private", "public", "pseudonymous"}, s.privacyMode or "private", function(opt)
+                s.privacyMode = opt
+            end):SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X, y - 4)
+            y = y - ROW_H
 
-            -- Save button
-            local saveBtn = CreateStyledButton(panel, "Save Preferences", 170, 26, function()
+            -- Save button (centered at panel bottom)
+            local saveBtn = CreateStyledButton(panel, "Save Preferences", BTN_W, BTN_H, function()
                 db.settings = s
                 print("|cff33ff33[DummyAnalyzer]|r Preferences saved.")
             end)
-            saveBtn:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 8, 8)
+            saveBtn:SetPoint("BOTTOM", panel, "BOTTOM", 0, 8)
         end
     end
 
