@@ -5667,9 +5667,12 @@ ShowConfigureDialog = function(parent)
     dialog:Show()
 end
 
+local exportDialogRef = nil
 ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, suggestMode, buffGaps, selectedLogIds)
+    if exportDialogRef and exportDialogRef:IsShown() then exportDialogRef:Hide() end
     local exportDialog = nil
     exportDialog = CreateStyledFrame("Frame", nil, UIParent); trackDialog(exportDialog)
+    exportDialogRef = exportDialog
     exportDialog:SetSize(680, 600)
     exportDialog:SetPoint("CENTER")
     exportDialog:SetMovable(true)
@@ -6178,25 +6181,27 @@ ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, 
         end
         local simcCastCounts = db.simcData.castCounts
         local simcDamage = db.simcData.damageData or {}
-        local seqText = GenerateEMSSequence(simcCastCounts, simcDamage)
-        local castCount, _ = 0; for _ in pairs(simcCastCounts) do castCount = castCount + 1 end
-        DebugLog("info", "simc-gen", string.format("SimC import generated seq: %s (%d spells in castCounts)", seqText and #seqText > 0 and "OK" or "empty", castCount))
-        if not seqText or seqText == "" then
+        local simcSeqText = GenerateEMSSequence(simcCastCounts, simcDamage)
+        local castCount = 0; for _ in pairs(simcCastCounts) do castCount = castCount + 1 end
+        DebugLog("info", "simc-gen", string.format("SimC import generated seq: %s (%d spells in castCounts)", simcSeqText and #simcSeqText > 0 and "OK" or "empty", castCount))
+        if not simcSeqText or simcSeqText == "" then
             print("|cffff8844[DummyAnalyzer]|r Failed to generate sequence from SimC data.")
             return
         end
-        local macros, ordered = ParseSequenceLines(seqText)
+        local macros, ordered = ParseSequenceLines(simcSeqText)
         local fullStepNames = {}
         for _, m in ipairs(macros) do
             local sn = ExtractSpellFromSeqLine(m)
             if sn then fullStepNames[#fullStepNames + 1] = sn end
         end
-        -- Create basic bestSequence for Push button
-        Addon.bestSequence = { score = 0, normScore = 0, seqText = seqText, importStr = GenerateEMSImportString(simcCastCounts, simcDamage), reasoningText = "Generated from SimC import (no real logs).", orderedSpellNames = ordered, fullSteps = fullStepNames }
+        local simcImportStr = GenerateEMSImportString(simcCastCounts, simcDamage)
+        -- Update closure variables in-place (same pattern as Best/Next buttons)
+        seqText = simcSeqText
+        importStr = simcImportStr
+        reasoningText = "Generated from SimC import (no real logs)."
+        Addon.bestSequence = { score = 0, normScore = 0, seqText = seqText, importStr = importStr, reasoningText = reasoningText, orderedSpellNames = ordered, fullSteps = fullStepNames }
         local persistDb = GetCharDB()
         persistDb.bestSequence = Addon.bestSequence
-        -- Show in export dialog
-        ShowExportDialog(simcCastCounts, simcDamage, {}, 0, true, nil, nil)
         ClearHighlights()
         if simcBtn then simcBtn:SetBackdropColor(C.selected[1], C.selected[2], C.selected[3], C.selected[4]) end
         SetEditText(GetSimcWarning() .. "Generated basic priority sequence from SimC import. Run a training dummy test, then click Best Sequence to optimize.")
