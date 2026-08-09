@@ -249,10 +249,12 @@ local function ParseSequenceLines(rawSeq)
         trimmed, numbered = trimmed:gsub("^%d+%.%s*", "")  -- strip "1. " numbered prefix
         local first = trimmed:sub(1, 1)
         if first == "/" then
-            local spell = trimmed:gsub("^/%a+%s+%[?combat%]?%s*", "")
+            local verb, payload = trimmed:match("^/(%a+)%s+(.+)$")
+            verb = verb or "cast"
+            local spell = payload and payload:gsub("^%[?combat%]?%s*", "") or ""
             local cleanSpell = spell:gsub("%s*%(interval:%d+%)$", ""):gsub("%s*%[dupe%]", ""):gsub("%s*$", "")
             if spell ~= "" then
-                macros[#macros + 1] = "/cast [combat] " .. spell
+                macros[#macros + 1] = "/" .. verb .. " [combat] " .. spell
                 if not seen[cleanSpell] then
                     seen[cleanSpell] = true
                     ordered[#ordered + 1] = cleanSpell
@@ -722,6 +724,11 @@ local function NumberOrZero(value)
     return SafeNumber(value) or 0
 end
 
+local function Ems_Default(value, fallback)
+    if value == nil then return fallback end
+    return value
+end
+
 local function ShouldTrackBuff(spellId, duration)
     if not spellId or IsSecretValue(spellId) then return false end
     if IGNORED_BUFFS[spellId] then return false end
@@ -1027,8 +1034,14 @@ end
 
 -- Detects the active GRIP-EMS sequence by matching its steps against what was cast
 local function ExtractSpellName(step)
+    if type(step) ~= "string" then return nil end
     local s = step:match("^/cast%s+.+%](.+)") or step:match("^/use%s+.+%](.+)") or step:match("^/cast%s+(.+)") or step:match("^/use%s+(.+)") or step
-    return s:match("^%s*(.-)%s*$")
+    s = s:match("^%s*(.-)%s*$")
+    -- An inventory slot ("/use [combat] 13") or an item link is not a spell name.
+    -- Returning one as if it were puts a token in the match list that no cast event
+    -- can produce. Callers already guard for nil.
+    if s == "" or s:match("^%d+$") or s:match("^item:") then return nil end
+    return s
 end
 
 -- Extract clean spell name from a sequence text line, stripping annotations like (interval:N) and [dupe]
@@ -4678,10 +4691,10 @@ GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, duratio
 				actions = actions,
                     keyPress = cfg.keyPress or "/startattack",
                     keyRelease = cfg.keyRelease or "",
-                    resetOnCombat = (cfg.resetOnCombat ~= nil) and cfg.resetOnCombat or true,
-                    resetOnTarget = (cfg.resetOnTarget ~= nil) and cfg.resetOnTarget or true,
-                    resetOnGear = (cfg.resetOnGear ~= nil) and cfg.resetOnGear or false,
-                    resetOnSpec = (cfg.resetOnSpec ~= nil) and cfg.resetOnSpec or false,
+                    resetOnCombat = Ems_Default(cfg.resetOnCombat, true),
+                    resetOnTarget = Ems_Default(cfg.resetOnTarget, true),
+                    resetOnGear = Ems_Default(cfg.resetOnGear, false),
+                    resetOnSpec = Ems_Default(cfg.resetOnSpec, false),
                     resetTimer = cfg.resetTimer or 0,
                     repeatCount = cfg.repeatCount or 0,
                 },
@@ -6312,9 +6325,11 @@ local pushBtn = CreateStyledButton(bottomRow, "Push to GRIP-EMS", 170, 32, funct
                 return
             end
         end
-        local pushedName = Ems_PushBestSequence(steps)
+        local pushedName, pushErr = Ems_PushBestSequence(steps)
         if pushedName then
             print("|cff33ff33[DummyAnalyzer EMS]|r Pushed to GRIP-EMS as '" .. pushedName .. "' (steps=" .. #steps .. ").")
+        else
+            print("|cffff8844[DummyAnalyzer EMS]|r Push refused by GRIP-EMS: " .. tostring(pushErr))
         end
     end, "primary")
     pushBtn:SetPoint("LEFT", copyBtn, "RIGHT", 10, 0)
@@ -7701,11 +7716,6 @@ emsPluginHandle = nil  -- populated by RegisterPlugin; nil until handshake succe
 local emsContextCache = "none"
 local emsLoadoutDirty = false
 
-local function Ems_Default(value, fallback)
-    if value == nil then return fallback end
-    return value
-end
-
 local function Ems_BuildSequenceData(seqName, orderedSteps)
     -- orderedSteps: array of spell names (built by ParseSequenceLines at the Best/Next button click)
     -- Returns a full CreateSequence table: action tree (actions) + compiled flat steps.
@@ -7825,8 +7835,8 @@ function Ems_PushBestSequence(orderedSteps)
         if debugMode then print("|cff33ff33[DummyAnalyzer EMS]|r UpdateSequence OK: " .. name) end
     else
         ok, reason = emsPluginHandle:CreateSequence(name, seqData)
-        if not ok and debugMode then
-            print("|cffff8844[DummyAnalyzer EMS]|r CreateSequence failed: " .. tostring(reason))
+        if not ok then
+            return nil, reason
         end
     end
     return name
