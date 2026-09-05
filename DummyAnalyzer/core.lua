@@ -599,54 +599,51 @@ local function ResetDamageData()
     totalDamage = 0
 end
 
-local function ReadDamageMeterData()
-    if debugMode then print("|cff33ff33[DummyAnalyzer Debug]|r Reading damage data...") end
+local function MeterSourceTotal(block)
+    return NumberOrZero(SafeTableGet(block, "totalAmount")) 
+end
 
-    if not C_DamageMeter then return false end
-
-    local sessionType = 1
-    local meterType = 0
-
-    local source
-    local okWithGuid, sourceWithGuid = pcall(C_DamageMeter.GetCombatSessionSourceFromType, sessionType, meterType, playerGUID)
-    if okWithGuid then source = sourceWithGuid end
-    if not source then
-        local okWithoutGuid, sourceWithoutGuid = pcall(C_DamageMeter.GetCombatSessionSourceFromType, sessionType, meterType)
-        if okWithoutGuid then source = sourceWithoutGuid end
+local function MeterSourceSpells(block)
+    local spells = SafeTableGet(block, "combatSpells")
+    if type(spells) ~= "table" then
+        spells = SafeTableGet(block, "spells")
     end
+    return type(spells) == "table" and spells or nil
+end
 
-    if not source then 
-        if debugMode then print("|cff33ff33[DummyAnalyzer Debug]|r No source data") end
-        return false 
-    end
-
-    totalDamage = SafeTableGet(source, "totalAmount") or 0
-    if debugMode then print("|cff33ff33[DummyAnalyzer Debug]|r Total Damage:", totalDamage) end
-
-    damageData = {}
-    local spells = SafeTableGet(source, "combatSpells")
-
-    if spells and type(spells) == "table" then
-        if debugMode then print("|cff33ff33[DummyAnalyzer Debug]|r Found", #spells, "spells") end
-        for _, spell in ipairs(spells) do
-            if type(spell) == "table" then
-                local spellID = SafeTableGet(spell, "spellID")
-                local name = GetSpellName(spellID)
-                local totalAmt = SafeTableGet(spell, "totalAmount") or 0
-                local details = SafeTableGet(spell, "combatSpellDetails")
-                local hits = 0
-                local highest = 0
-                if details and type(details) == "table" then
-                    hits = #details
-                    for _, d in ipairs(details) do
-                        if type(d) == "table" then
-                            local amt = SafeTableGet(d, "amount") or 0
-                            if amt > highest then highest = amt end
-                        end
+local function AddMeterSource(block)
+    if type(block) ~= "table" then return 0 end
+    local total = MeterSourceTotal(block)
+    if total <= 0 then return 0 end
+    local spells = MeterSourceSpells(block)
+    if not spells or #spells == 0 then return 0 end
+    for _, spell in ipairs(spells) do
+        if type(spell) == "table" then
+            local spellID = SafeTableGet(spell, "spellID")
+            local name = GetSpellName(spellID)
+            local totalAmt = NumberOrZero(SafeTableGet(spell, "totalAmount"))
+            local aps = NumberOrZero(SafeTableGet(spell, "amountPerSecond"))
+            local overkill = NumberOrZero(SafeTableGet(spell, "overkillAmount"))
+            local details = SafeTableGet(spell, "combatSpellDetails")
+            local hits = 0
+            local highest = 0
+            if type(details) == "table" then
+                hits = #details
+                for _, d in ipairs(details) do
+                    if type(d) == "table" then
+                        local amt = NumberOrZero(SafeTableGet(d, "amount"))
+                        if amt > highest then highest = amt end
                     end
                 end
-                local aps = SafeTableGet(spell, "amountPerSecond") or 0
-                local overkill = SafeTableGet(spell, "overkillAmount") or 0
+            end
+            local existing = damageData[name]
+            if existing then
+                existing.total = (existing.total or 0) + totalAmt
+                existing.hits = (existing.hits or 0) + hits
+                if highest > existing.highest then existing.highest = highest end
+                existing.aps = (existing.aps or 0) + aps
+                existing.overkill = (existing.overkill or 0) + overkill
+            else
                 damageData[name] = {
                     total = totalAmt,
                     hits = hits,
@@ -656,6 +653,91 @@ local function ReadDamageMeterData()
                 }
             end
         end
+    end
+    return total
+end
+
+local function ReadDamageMeterData()
+    if debugMode then print("|cff33ff33[DummyAnalyzer Debug]|r Reading damage data...") end
+
+    ResetDamageData()
+    if not C_DamageMeter then return false end
+
+    local ok, err = pcall(function()
+        local sessionType = 1
+        local meterType = 0
+
+        -- 1) Legacy per-type source. In Midnight the 'current' session often rolls
+        --    over right after combat ends, so this may return nil or an empty block.
+        local function tryLegacy()
+            local source
+            local okWithGuid, sourceWithGuid = pcall(C_DamageMeter.GetCombatSessionSourceFromType, sessionType, meterType, playerGUID)
+            if okWithGuid and sourceWithGuid then source = sourceWithGuid end
+            if not source then
+                local okWithoutGuid, sourceWithoutGuid = pcall(C_DamageMeter.GetCombatSessionSourceFromType, sessionType, meterType)
+                if okWithoutGuid then source = sourceWithoutGuid end
+            end
+            return source
+        end
+
+        local legacy = tryLegacy()
+        if legacy then AddMeterSource(legacy) end
+
+        -- 2) New Midnight session-based APIs: gather every available session ID and
+        --    merge the player's damage from the sessions that overlap this test window.
+        local sessionList = {}
+        local okSessions, gotSessions = pcall(C_DamageMeter.GetSessions)
+        if okSessions and type(gotSessions) == "table" then
+            for _, s in ipairs(gotSessions) do
+                local id = nil
+                if type(s) == "table" then
+                    id = SafeTableGet(s, "sessionID") or SafeTableGet(s, "id")
+                else
+                    id = s
+                end
+                if id then sessionList[id] = true end
+            end
+        end
+        local okID, gotID = pcall(C_DamageMeter.GetCurrentSessionID)
+        if okID and gotID then sessionList[gotID] = true end
+
+        if next(sessionList) then
+            local winStart = (startTime or 0) - 5
+            local winEnd = (testEndTime or GetTime()) + 5
+            for id in pairs(sessionList) do
+                local sInfo = nil
+                local okInfo, gotInfo = pcall(C_DamageMeter.GetSessionInfo, id)
+                if okInfo and type(gotInfo) == "table" then sInfo = gotInfo end
+                local sTime = sInfo and (SafeTableGet(sInfo, "startTime") or SafeTableGet(sInfo, "start") or SafeTableGet(sInfo, "startTimeEpoch")) or nil
+                local eTime = sInfo and (SafeTableGet(sInfo, "endTime") or SafeTableGet(sInfo, "end") or SafeTableGet(sInfo, "endTimeEpoch")) or nil
+                if (sTime == nil and eTime == nil) or (sTime and sTime >= winStart and sTime <= winEnd) or (eTime and eTime >= winStart and eTime <= winEnd) or (sTime and eTime and sTime <= winEnd and eTime >= winStart) then
+                    local okP, playerBlock = pcall(C_DamageMeter.GetPlayerData, id, playerGUID)
+                    if okP and MeterSourceTotal(playerBlock) > 0 then
+                        AddMeterSource(playerBlock)
+                    else
+                        local okParty, partyData = pcall(C_DamageMeter.GetPartyData, id)
+                        if okParty and type(partyData) == "table" then
+                            for _, member in ipairs(partyData) do
+                                if type(member) == "table" then
+                                    local guid = SafeTableGet(member, "unitGUID") or SafeTableGet(member, "playerGUID")
+                                    if not guid or guid == playerGUID then
+                                        local block = SafeTableGet(member, "playerData")
+                                        if type(block) ~= "table" then block = member end
+                                        AddMeterSource(block)
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    if not ok then
+        if debugMode then print("|cff33ff33[DummyAnalyzer Debug]|r Damage meter read error: " .. tostring(err)) end
+    elseif totalDamage == 0 and debugMode then
+        print("|cff33ff33[DummyAnalyzer Debug]|r No damage found in any meter session/source")
     end
 
     return totalDamage > 0
@@ -2252,7 +2334,7 @@ function Addon.GenerateLogReportText(log)
 
     if log.spellHistory and #log.spellHistory > 0 then
         table.insert(lines, "--- Cast Timeline ---")
-        local maxTimeline = math.min(#log.spellHistory, 80)
+        local maxTimeline = math.min(#log.spellHistory, 500)
         for i = 1, maxTimeline do
             local s = log.spellHistory[i]
             local costStr = ""
@@ -2261,8 +2343,8 @@ function Addon.GenerateLogReportText(log)
             end
             table.insert(lines, string.format("%4d. [%5.1fs]%s %s", i, s.time, costStr, s.name or "?"))
         end
-        if #log.spellHistory > 80 then
-            table.insert(lines, string.format("  ... (%d more casts not shown)", #log.spellHistory - 80))
+        if #log.spellHistory > 500 then
+            table.insert(lines, string.format("  ... (%d more casts not shown)", #log.spellHistory - 500))
         end
         table.insert(lines, "")
     end
@@ -2731,15 +2813,15 @@ local function GenerateReportText()
     -- Cast timeline with resource level
     if totalCasts > 0 then
         table.insert(lines, "--- Cast Timeline ---")
-        local maxShow = math.min(totalCasts, 100)
+        local maxShow = math.min(totalCasts, 2000)
         for i = 1, maxShow do
             local s = spellHistory[i]
             local sName = s.name
             if sName and not pcall(string.byte, sName, 1) then sName = "?" end
             table.insert(lines, string.format("%4d. [%5.1fs] %s", i, s.time, sName))
         end
-        if totalCasts > 100 then
-            table.insert(lines, string.format("  (... %d more)", totalCasts - 100))
+        if totalCasts > 2000 then
+            table.insert(lines, string.format("  (... %d more)", totalCasts - 2000))
         end
         table.insert(lines, "")
     end

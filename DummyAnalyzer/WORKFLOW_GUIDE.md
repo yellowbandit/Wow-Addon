@@ -106,6 +106,12 @@ git push origin main
 - `git rebase --skip` to skip the conflicting commit (loses friend's change)
 - `git rebase --abort` to cancel and try `git pull --no-rebase` instead
 
+## Changelog
+
+### 2026-09-05 — Damage meter session rollover + timeline caps
+- **Fix:** rewritten `ReadDamageMeterData()` — the report now merges all `C_DamageMeter` combat sessions overlapping the test window (legacy `GetCombatSessionSourceFromType` + new `GetSessions()`/`GetPlayerData()`/`GetPartyData()`), fixing reports that showed `Total Dmg: 0` with no damage breakdown after combat ended.
+- **Fix:** cast timeline now shows up to **2000** casts in the live report (was 100) and **500** in saved-log view (was 80), removing the `(... more)` truncation.
+
 ## GitHub Desktop Setup (one-time)
 
 1. Download from https://desktop.github.com
