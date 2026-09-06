@@ -468,6 +468,12 @@ local spellNameCache = {}
 local damageData = {}
 local totalDamage = 0
 local playerGUID = nil
+local playerName = nil
+local meterDiag = nil
+local meterReadError = nil
+local damageFromEnemyFallback = false
+local meterEventSeen = false
+local BuildMeterDiag
 local pendingReport = false
 local reportWaitTicker = nil
 local activeBuffs = {}
@@ -478,7 +484,16 @@ local debuffUptime = {}
 local buffGaps = {}
 local lastBuffExpiry = {}
 local spellPowerCosts = {}
-local IsSecretValue = issecretvalue or function() return false end
+-- Robust secret detection (CombatAnalytics ApiCompat pattern): a secret value
+-- cannot be concatenated with tostring (throws) and/or compares unequally to "".
+local function IsSecretValue(val)
+    if val == nil then return false end
+    local okConcat, asStr = pcall(function() return tostring(val) .. "" end)
+    if not okConcat then return true end
+    if type(asStr) ~= "string" then return true end
+    local okCmp = pcall(function() return asStr == "" end)
+    return not okCmp
+end
 local simcDialog = nil
 local clogDialog = nil
 local comparisonPopup = nil
@@ -597,10 +612,20 @@ end
 local function ResetDamageData()
     damageData = {}
     totalDamage = 0
+    damageFromEnemyFallback = false
 end
+
+local SafeNumber, NumberOrZero
 
 local function MeterSourceTotal(block)
     return NumberOrZero(SafeTableGet(block, "totalAmount")) 
+end
+
+local function SameGuid(a, b)
+    if not a or not b then return false end
+    if IsSecretValue(a) or IsSecretValue(b) then return false end
+    local ok, eq = pcall(function() return a == b end)
+    return ok and eq == true
 end
 
 local function MeterSourceSpells(block)
@@ -619,39 +644,44 @@ local function AddMeterSource(block)
     if not spells or #spells == 0 then return 0 end
     for _, spell in ipairs(spells) do
         if type(spell) == "table" then
-            local spellID = SafeTableGet(spell, "spellID")
-            local name = GetSpellName(spellID)
-            local totalAmt = NumberOrZero(SafeTableGet(spell, "totalAmount"))
-            local aps = NumberOrZero(SafeTableGet(spell, "amountPerSecond"))
-            local overkill = NumberOrZero(SafeTableGet(spell, "overkillAmount"))
-            local details = SafeTableGet(spell, "combatSpellDetails")
-            local hits = 0
-            local highest = 0
-            if type(details) == "table" then
-                hits = #details
-                for _, d in ipairs(details) do
-                    if type(d) == "table" then
-                        local amt = NumberOrZero(SafeTableGet(d, "amount"))
-                        if amt > highest then highest = amt end
+            local okSpell, spellErr = pcall(function()
+                local spellID = SafeTableGet(spell, "spellID")
+                local name = GetSpellName(spellID)
+                if not name or name == "" then
+                    return
+                end
+                local totalAmt = NumberOrZero(SafeTableGet(spell, "totalAmount"))
+                local aps = NumberOrZero(SafeTableGet(spell, "amountPerSecond"))
+                local overkill = NumberOrZero(SafeTableGet(spell, "overkillAmount"))
+                local details = SafeTableGet(spell, "combatSpellDetails")
+                local hits = 0
+                local highest = 0
+                if type(details) == "table" then
+                    hits = #details
+                    for _, d in ipairs(details) do
+                        if type(d) == "table" then
+                            local amt = NumberOrZero(SafeTableGet(d, "amount"))
+                            if amt > highest then highest = amt end
+                        end
                     end
                 end
-            end
-            local existing = damageData[name]
-            if existing then
-                existing.total = (existing.total or 0) + totalAmt
-                existing.hits = (existing.hits or 0) + hits
-                if highest > existing.highest then existing.highest = highest end
-                existing.aps = (existing.aps or 0) + aps
-                existing.overkill = (existing.overkill or 0) + overkill
-            else
-                damageData[name] = {
-                    total = totalAmt,
-                    hits = hits,
-                    highest = highest,
-                    aps = aps,
-                    overkill = overkill,
-                }
-            end
+                local existing = damageData[name]
+                if existing then
+                    existing.total = (existing.total or 0) + totalAmt
+                    existing.hits = (existing.hits or 0) + hits
+                    if highest > existing.highest then existing.highest = highest end
+                    existing.aps = (existing.aps or 0) + aps
+                    existing.overkill = (existing.overkill or 0) + overkill
+                else
+                    damageData[name] = {
+                        total = totalAmt,
+                        hits = hits,
+                        highest = highest,
+                        aps = aps,
+                        overkill = overkill,
+                    }
+                end
+            end)
         end
     end
     return total
@@ -664,12 +694,26 @@ local function ReadDamageMeterData()
     if not C_DamageMeter then return false end
 
     local ok, err = pcall(function()
-        local sessionType = 1
         local meterType = 0
 
-        -- 1) Legacy per-type source. In Midnight the 'current' session often rolls
-        --    over right after combat ends, so this may return nil or an empty block.
-        local function tryLegacy()
+        -- Session types: prefer Expired (just-finalized, locked duration, ready
+        -- immediately after combat ends), then Current. CombatAnalytics pattern.
+        local currentType = 1
+        local expiredType
+        if Enum and Enum.DamageMeterSessionType then
+            local okC, cv = pcall(function() return Enum.DamageMeterSessionType.Current end)
+            if okC and cv then currentType = cv end
+            local okE, ev = pcall(function() return Enum.DamageMeterSessionType.Expired end)
+            if okE and ev then expiredType = ev end
+        end
+        local sessionTypes = {}
+        if expiredType then table.insert(sessionTypes, expiredType) end
+        table.insert(sessionTypes, currentType)
+
+        -- 1) Legacy per-type source (Expired first, falling through to Current).
+        --    In Midnight the 'current' session often rolls over right after combat
+        --    ends, so this may return nil or an empty block.
+        local function tryLegacy(sessionType)
             local source
             local okWithGuid, sourceWithGuid = pcall(C_DamageMeter.GetCombatSessionSourceFromType, sessionType, meterType, playerGUID)
             if okWithGuid and sourceWithGuid then source = sourceWithGuid end
@@ -680,52 +724,72 @@ local function ReadDamageMeterData()
             return source
         end
 
-        local legacy = tryLegacy()
-        if legacy then AddMeterSource(legacy) end
-
-        -- 2) New Midnight session-based APIs: gather every available session ID and
-        --    merge the player's damage from the sessions that overlap this test window.
-        local sessionList = {}
-        local okSessions, gotSessions = pcall(C_DamageMeter.GetSessions)
-        if okSessions and type(gotSessions) == "table" then
-            for _, s in ipairs(gotSessions) do
-                local id = nil
-                if type(s) == "table" then
-                    id = SafeTableGet(s, "sessionID") or SafeTableGet(s, "id")
+        for _, st in ipairs(sessionTypes) do
+            local legacy = tryLegacy(st)
+            if type(legacy) == "table" and MeterSourceTotal(legacy) > 0 then
+                local mergedTotal = AddMeterSource(legacy)
+                if mergedTotal > 0 then
+                    totalDamage = totalDamage + mergedTotal
                 else
-                    id = s
+                    -- Block has a total but no per-spell rows (secret/empty spell list);
+                    -- still count the raw total so the report shows damage.
+                    totalDamage = totalDamage + MeterSourceTotal(legacy)
                 end
-                if id then sessionList[id] = true end
             end
+            if totalDamage > 0 then break end
         end
-        local okID, gotID = pcall(C_DamageMeter.GetCurrentSessionID)
-        if okID and gotID then sessionList[gotID] = true end
 
-        if next(sessionList) then
-            local winStart = (startTime or 0) - 5
-            local winEnd = (testEndTime or GetTime()) + 5
-            for id in pairs(sessionList) do
-                local sInfo = nil
-                local okInfo, gotInfo = pcall(C_DamageMeter.GetSessionInfo, id)
-                if okInfo and type(gotInfo) == "table" then sInfo = gotInfo end
-                local sTime = sInfo and (SafeTableGet(sInfo, "startTime") or SafeTableGet(sInfo, "start") or SafeTableGet(sInfo, "startTimeEpoch")) or nil
-                local eTime = sInfo and (SafeTableGet(sInfo, "endTime") or SafeTableGet(sInfo, "end") or SafeTableGet(sInfo, "endTimeEpoch")) or nil
-                if (sTime == nil and eTime == nil) or (sTime and sTime >= winStart and sTime <= winEnd) or (eTime and eTime >= winStart and eTime <= winEnd) or (sTime and eTime and sTime <= winEnd and eTime >= winStart) then
-                    local okP, playerBlock = pcall(C_DamageMeter.GetPlayerData, id, playerGUID)
-                    if okP and MeterSourceTotal(playerBlock) > 0 then
-                        AddMeterSource(playerBlock)
-                    else
-                        local okParty, partyData = pcall(C_DamageMeter.GetPartyData, id)
-                        if okParty and type(partyData) == "table" then
-                            for _, member in ipairs(partyData) do
-                                if type(member) == "table" then
-                                    local guid = SafeTableGet(member, "unitGUID") or SafeTableGet(member, "playerGUID")
-                                    if not guid or guid == playerGUID then
-                                        local block = SafeTableGet(member, "playerData")
-                                        if type(block) ~= "table" then block = member end
-                                        AddMeterSource(block)
+        -- 2) Midnight session-based APIs: GetAvailableCombatSessions() -> list of
+        --    {sessionID, name, durationSeconds}; GetCombatSessionFromID(sessionID,
+        --    type) -> {combatSources, maxAmount, totalAmount}; and the player's
+        --    per-spell breakdown comes from GetCombatSessionSourceFromID(sessionID,
+        --    type, sourceGUID). DamageMeterCombatSource has NO combatSpells field,
+        --    so per-spell data must come from GetCombatSessionSourceFromID; the
+        --    session's combatSources only gives each combatant's totalAmount.
+        if totalDamage == 0 then
+            local okSessions, sessions = pcall(C_DamageMeter.GetAvailableCombatSessions)
+            if okSessions and type(sessions) == "table" then
+                for _, s in ipairs(sessions) do
+                    if type(s) == "table" then
+                        local id = SafeTableGet(s, "sessionID")
+                        if id then
+                            -- Player's total from the session roster.
+                            local playerTotal = 0
+                            local playerIsLocal = false
+                            local okSession, session = pcall(C_DamageMeter.GetCombatSessionFromID, id, meterType)
+                            if okSession and type(session) == "table" then
+                                local sources = SafeTableGet(session, "combatSources")
+                                if type(sources) == "table" then
+                                    for _, src in ipairs(sources) do
+                                        if type(src) == "table" then
+                                            local guid = SafeTableGet(src, "sourceGUID")
+                                            local isLocal = SafeTableGet(src, "isLocalPlayer") == true
+                                            local srcName = SafeTableGet(src, "name")
+                                            if isLocal then playerIsLocal = true end
+                                            if isLocal or SameGuid(guid, playerGUID) or (playerName and srcName and not IsSecretValue(srcName) and srcName == playerName) then
+                                                playerTotal = playerTotal + NumberOrZero(SafeTableGet(src, "totalAmount"))
+                                            end
+                                        end
                                     end
                                 end
+                            end
+                            -- Player's per-spell breakdown. If the GUID-keyed read
+                            -- fails but the roster flagged the player as local,
+                            -- retry with nil source args (supported).
+                            local okSource, playerBlock = pcall(C_DamageMeter.GetCombatSessionSourceFromID, id, meterType, playerGUID)
+                            if (not okSource or (type(playerBlock) ~= "table") or MeterSourceTotal(playerBlock) == 0) and playerIsLocal then
+                                okSource, playerBlock = pcall(C_DamageMeter.GetCombatSessionSourceFromID, id, meterType, nil, nil)
+                            end
+                            if okSource and type(playerBlock) == "table" and MeterSourceTotal(playerBlock) > 0 then
+                                local blockTotal = AddMeterSource(playerBlock)
+                                if blockTotal > 0 then
+                                    totalDamage = totalDamage + blockTotal
+                                elseif playerTotal > 0 then
+                                    totalDamage = totalDamage + playerTotal
+                                end
+                            elseif playerTotal > 0 then
+                                -- No spell breakdown available; count the roster total only.
+                                totalDamage = totalDamage + playerTotal
                             end
                         end
                     end
@@ -735,12 +799,279 @@ local function ReadDamageMeterData()
     end)
 
     if not ok then
-        if debugMode then print("|cff33ff33[DummyAnalyzer Debug]|r Damage meter read error: " .. tostring(err)) end
+        meterReadError = "Meter read error: " .. tostring(err)
+        print("|cffff4444[DummyAnalyzer]|r " .. meterReadError)
     elseif totalDamage == 0 and debugMode then
         print("|cff33ff33[DummyAnalyzer Debug]|r No damage found in any meter session/source")
     end
 
+    -- Fallback: the built-in meter's current session rolls over at combat end,
+    -- so the post-combat read above can legitimately return nothing. Use the
+    -- in-combat delta snapshot accumulated by CaptureCombatSnapshot instead.
+    if totalDamage == 0 and combatSnapValid and combatSnapTotal > 0 then
+        damageData = combatSnapData
+        totalDamage = combatSnapTotal
+        if debugMode then
+            print("|cff33ff33[DummyAnalyzer Debug]|r Using in-combat meter snapshot: " .. ShortNum(totalDamage))
+        end
+    end
+
+    -- EnemyDamageTaken fallback (EDIT#6, CombatAnalytics pattern): for a training
+    -- dummy the damage the dummy "took" equals the player's damage dealt, so the
+    -- EnemyDamageTaken meter type (10) is a reliable source when the DamageDone
+    -- session hasn't settled yet. Mark the report as estimated.
+    if totalDamage == 0 then
+        local enemyType = 10
+        if Enum and Enum.DamageMeterType then
+            local okEt, ev2 = pcall(function() return Enum.DamageMeterType.EnemyDamageTaken end)
+            if okEt and ev2 then enemyType = ev2 end
+        end
+        local okSessions2, sessions2 = pcall(C_DamageMeter.GetAvailableCombatSessions)
+        if okSessions2 and type(sessions2) == "table" then
+            local enemyTotal = 0
+            for _, s2 in ipairs(sessions2) do
+                if type(s2) == "table" then
+                    local id2 = SafeTableGet(s2, "sessionID")
+                    if id2 then
+                        local okEnemy, enemyBlock = pcall(C_DamageMeter.GetCombatSessionSourceFromID, id2, enemyType, nil, nil)
+                        if okEnemy and type(enemyBlock) == "table" then
+                            enemyTotal = enemyTotal + MeterSourceTotal(enemyBlock)
+                        else
+                            local okEnemy2, enemySession = pcall(C_DamageMeter.GetCombatSessionFromID, id2, enemyType)
+                            if okEnemy2 and type(enemySession) == "table" then
+                                enemyTotal = enemyTotal + NumberOrZero(SafeTableGet(enemySession, "totalAmount"))
+                            end
+                        end
+                    end
+                end
+            end
+            if enemyTotal > 0 then
+                totalDamage = enemyTotal
+                damageFromEnemyFallback = true
+                if debugMode then
+                    print("|cff33ff33[DummyAnalyzer Debug]|r Using EnemyDamageTaken fallback: " .. ShortNum(totalDamage))
+                end
+            end
+        end
+    end
+
+    if totalDamage == 0 then
+        meterDiag = BuildMeterDiag()
+    end
     return totalDamage > 0
+end
+
+-- ============================================
+-- Meter diagnostics (report-aided debugging). Whenever the meter read comes
+-- back empty, GenerateReportText includes this so we can see exactly what the
+-- C_DamageMeter APIs return in-game (and whether amounts are secret values).
+-- ============================================
+-- MUST be declared before BuildMeterDiag (lexical scope) - calls through pcall
+    -- so a missing/misbehaving issecretvalue global can't crash the report.
+    local function DiagSecret(val)
+        local ok, isSec = pcall(isecretvalue, val)
+        return ok and isSec and "YES" or "no"
+    end
+
+ BuildMeterDiag = function()
+    local out = {}
+    if meterReadError then
+        table.insert(out, "READ-ERROR: " .. tostring(meterReadError))
+    end
+
+    local okAvail, availOk, availReason = pcall(function()
+        return C_DamageMeter.IsDamageMeterAvailable()
+    end)
+    if okAvail then
+        table.insert(out, "IsDamageMeterAvailable: " .. tostring(availOk) .. (availReason and (" (" .. tostring(availReason) .. ")") or ""))
+    else
+        table.insert(out, "IsDamageMeterAvailable: ERROR " .. tostring(availOk))
+    end
+
+    local okSess, sessions = pcall(C_DamageMeter.GetAvailableCombatSessions)
+    if okSess and type(sessions) == "table" then
+        table.insert(out, "AvailableSessions: " .. tostring(#sessions))
+        for _, s in ipairs(sessions) do
+            if type(s) == "table" then
+                local id = SafeTableGet(s, "sessionID")
+                table.insert(out, "  session id=" .. tostring(id) .. " name=" .. tostring(SafeTableGet(s, "name")) .. " dur=" .. tostring(SafeTableGet(s, "durationSeconds")))
+                local okCS, cs = pcall(C_DamageMeter.GetCombatSessionFromID, id, 0)
+                if okCS and type(cs) == "table" then
+                    local tot = SafeTableGet(cs, "totalAmount")
+                    local srcs = SafeTableGet(cs, "combatSources")
+                    table.insert(out, "    FromID(" .. tostring(id) .. ") total=" .. tostring(tot) .. " secret=" .. tostring(DiagSecret(tot)) .. " sources=" .. (type(srcs) == "table" and tostring(#srcs) or "none"))
+                    if type(srcs) == "table" then
+                        for _, src in ipairs(srcs) do
+                            if type(src) == "table" then
+                                table.insert(out, "      src guid=" .. tostring(SafeTableGet(src, "sourceGUID")) .. " local=" .. tostring(SafeTableGet(src, "isLocalPlayer") == true) .. " total=" .. tostring(SafeTableGet(src, "totalAmount")))
+                            end
+                        end
+                    end
+                    local okPS, playerSource = pcall(C_DamageMeter.GetCombatSessionSourceFromID, id, 0, playerGUID)
+                    table.insert(out, "    PlayerSource(id," .. tostring(id) .. ") " .. (okPS and (type(playerSource) == "table" and ("spells=" .. tostring(#(MeterSourceSpells(playerSource) or {})) .. " total=" .. tostring(SafeTableGet(playerSource, "totalAmount"))) or tostring(playerSource)) or "FAILED"))
+                else
+                    table.insert(out, "    GetCombatSessionFromID FAILED" .. (okCS and (" nil=" .. tostring(cs)) or ""))
+                end
+            end
+        end
+    else
+        table.insert(out, "GetAvailableCombatSessions FAILED returned: " .. tostring(sessions))
+    end
+
+    local function probeLegacy(guid)
+        local okL, l = pcall(C_DamageMeter.GetCombatSessionSourceFromType, 1, 0, guid)
+        return okL and l or nil
+    end
+    local legacy = probeLegacy(playerGUID)
+    if not legacy then legacy = probeLegacy() end
+    if type(legacy) == "table" then
+        local tot = SafeTableGet(legacy, "totalAmount")
+        local spells = MeterSourceSpells(legacy)
+        table.insert(out, "Legacy(1,0) total=" .. tostring(tot) .. " secret=" .. tostring(DiagSecret(tot)) .. " spells=" .. (type(spells) == "table" and tostring(#spells) or "none"))
+    else
+        table.insert(out, "Legacy(1,0) returned: " .. tostring(legacy))
+    end
+
+    local okSrc, src = pcall(C_DamageMeter.GetCombatSessionSourceFromID, 0, 0, playerGUID)
+    table.insert(out, "SourceFromID(0,0,guid): " .. (okSrc and (type(src) == "table" and ("total=" .. tostring(SafeTableGet(src, "totalAmount"))) or tostring(src)) or "FAILED"))
+
+    return table.concat(out, "\n")
+end
+
+-- ============================================
+-- In-combat damage meter capture.
+-- The built-in meter's 'current' session rolls over when combat ends, so the
+-- post-combat read in ReadDamageMeterData can come back empty. We poll the
+-- meter every tick DURING the test instead and accumulate the per-session
+-- delta, so damage data survives even if the post-combat read returns nothing.
+-- ============================================
+local meterSessionLast = {}
+local combatSnapTotal = 0
+local combatSnapData = {}
+local combatSnapValid = false
+
+local function MergeMeterSpellDelta(amount, spell)
+    if not (amount and amount > 0) or type(spell) ~= "table" then return end
+    local spellID = SafeTableGet(spell, "spellID")
+    local name = GetSpellName(spellID)
+    if not name then return end
+    local existing = combatSnapData[name]
+    local aps = NumberOrZero(SafeTableGet(spell, "amountPerSecond"))
+    local overkill = NumberOrZero(SafeTableGet(spell, "overkillAmount"))
+    local details = SafeTableGet(spell, "combatSpellDetails")
+    local hits = 0
+    local highest = 0
+    if type(details) == "table" then
+        hits = #details
+        for _, d in ipairs(details) do
+            if type(d) == "table" then
+                local amt = NumberOrZero(SafeTableGet(d, "amount"))
+                if amt > highest then highest = amt end
+            end
+        end
+    end
+    if existing then
+        existing.total = (existing.total or 0) + amount
+        existing.hits = (existing.hits or 0) + hits
+        if highest > (existing.highest or 0) then existing.highest = highest end
+        existing.aps = (existing.aps or 0) + aps
+        existing.overkill = (existing.overkill or 0) + overkill
+    else
+        combatSnapData[name] = { total = amount, hits = hits, highest = highest, aps = aps, overkill = overkill }
+    end
+end
+
+-- Accumulates the per-tick delta from the meter for one source block.
+local function AccumulateSourceDelta(key, src)
+    local spells = MeterSourceSpells(src)
+    if not spells then return end
+    local last = meterSessionLast[key] or { spells = {} }
+    for _, spell in ipairs(spells) do
+        if type(spell) == "table" then
+            local spellID = SafeTableGet(spell, "spellID")
+            if spellID then
+                local curTotal = NumberOrZero(SafeTableGet(spell, "totalAmount"))
+                local prevTotal = last.spells[spellID] or 0
+                local delta = curTotal - prevTotal
+                if delta < 0 then delta = curTotal end -- session reset
+                if delta > 0 then
+                    MergeMeterSpellDelta(delta, spell)
+                    combatSnapTotal = combatSnapTotal + delta
+                end
+                last.spells[spellID] = curTotal
+            end
+        end
+    end
+    meterSessionLast[key] = last
+    combatSnapValid = true
+end
+
+local function ResetMeterCapture()
+    meterSessionLast = {}
+    combatSnapTotal = 0
+    combatSnapData = {}
+    combatSnapValid = false
+end
+
+-- baselineOnly=true seeds the previous totals (called at test start) without
+-- adding anything, so later ticks only count damage dealt during the test.
+local function CaptureCombatSnapshot(baselineOnly)
+    if not testActive or not C_DamageMeter then return end
+    local ok, err = pcall(function()
+        local okAvail, sessions = pcall(C_DamageMeter.GetAvailableCombatSessions)
+        if okAvail and type(sessions) == "table" then
+            for _, s in ipairs(sessions) do
+                if type(s) == "table" then
+                    local id = SafeTableGet(s, "sessionID")
+                    if id then
+                        local okSrc, src = pcall(C_DamageMeter.GetCombatSessionSourceFromID, id, 0, playerGUID)
+                        if okSrc and type(src) == "table" then
+                            local key = "session_" .. tostring(id)
+                            if baselineOnly then
+                                local spells = MeterSourceSpells(src)
+                                if spells then
+                                    local last = {}
+                                    for _, spell in ipairs(spells) do
+                                        if type(spell) == "table" and SafeTableGet(spell, "spellID") then
+                                            last[SafeTableGet(spell, "spellID")] = NumberOrZero(SafeTableGet(spell, "totalAmount"))
+                                        end
+                                    end
+                                    meterSessionLast[key] = last
+                                end
+                            else
+                                AccumulateSourceDelta(key, src)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Legacy per-type source handled the same way.
+        local okLegacy, legacy = pcall(C_DamageMeter.GetCombatSessionSourceFromType, 1, 0, playerGUID)
+        if not okLegacy or type(legacy) ~= "table" then
+            okLegacy, legacy = pcall(C_DamageMeter.GetCombatSessionSourceFromType, 1, 0)
+        end
+        if okLegacy and type(legacy) == "table" then
+            if baselineOnly then
+                local spells = MeterSourceSpells(legacy)
+                if spells then
+                    local last = {}
+                    for _, spell in ipairs(spells) do
+                        if type(spell) == "table" and SafeTableGet(spell, "spellID") then
+                            last[SafeTableGet(spell, "spellID")] = NumberOrZero(SafeTableGet(spell, "totalAmount"))
+                        end
+                    end
+                    meterSessionLast["legacy"] = last
+                end
+            else
+                AccumulateSourceDelta("legacy", legacy)
+            end
+        end
+    end)
+    if debugMode and not ok then
+        print("|cff33ff33[DummyAnalyzer Debug]|r Capture snapshot error: " .. tostring(err))
+    end
 end
 
 local RecordKnownBuffCast
@@ -795,14 +1126,14 @@ local function BuildBuffKey(spellId, spellName)
     return nil
 end
 
-local function SafeNumber(value)
+SafeNumber = function(value)
     if value == nil or IsSecretValue(value) then return nil end
     local ok, numberValue = pcall(function() return tonumber(value) end)
     if ok then return numberValue end
     return nil
 end
 
-local function NumberOrZero(value)
+NumberOrZero = function(value)
     return SafeNumber(value) or 0
 end
 
@@ -997,6 +1328,7 @@ local function PollTargetDebuffs()
 end
 
 local function PollTestMetrics()
+    CaptureCombatSnapshot(false)
     PollPlayerBuffs()
     PollTargetDebuffs()
 end
@@ -2631,10 +2963,18 @@ local function GenerateReportText()
 
     if totalDamage > 0 then
         local dps = totalDamage / elapsed
-        table.insert(lines, string.format("Total Dmg: %s", ShortNum(totalDamage)))
-        table.insert(lines, string.format("DPS: %s", ShortNum(dps)))
+        local estSuffix = damageFromEnemyFallback and " (estimated from enemy damage taken)" or ""
+        table.insert(lines, string.format("Total Dmg: %s%s", ShortNum(totalDamage), estSuffix))
+        table.insert(lines, string.format("DPS: %s%s", ShortNum(dps), estSuffix))
     else
         table.insert(lines, "Total Dmg: 0")
+        if meterDiag then
+            table.insert(lines, "--- Damage Meter Diagnostics ---")
+            for _, dl in ipairs({strsplit("\n", meterDiag)}) do
+                table.insert(lines, dl)
+            end
+            table.insert(lines, "")
+        end
     end
 
     if totalCasts > 0 and elapsed > 0 then
@@ -3639,10 +3979,22 @@ end
 -- ============================================
 -- TEST CONTROL (original)
 -- ============================================
+local reportRetryCount = 0
+local MAX_REPORT_RETRIES = 8
+
 local function FinalizeReport()
     pendingReport = false
     ResetDamageData()
     ReadDamageMeterData()
+    if totalDamage == 0 and reportRetryCount < MAX_REPORT_RETRIES then
+        reportRetryCount = reportRetryCount + 1
+        if debugMode then
+            print("|cff33ff33[DummyAnalyzer Debug]|r Damage read empty, retrying (" .. reportRetryCount .. "/" .. MAX_REPORT_RETRIES .. ")...")
+        end
+        C_Timer.After(0.5, FinalizeReport)
+        return
+    end
+    reportRetryCount = 0
     ShowReport()
 end
 
@@ -3721,6 +4073,10 @@ local function BeginActiveTest(minutes)
     testActive = true
     startTime = GetTime()
     testEndTime = nil
+    -- Seed the in-combat meter capture baseline at test start so later deltas
+    -- only count damage dealt after this moment.
+    ResetMeterCapture()
+    CaptureCombatSnapshot(true)
     -- Snapshot which GRIP-EMS sequence is active at test start. Sourced from the public
     -- SEQUENCE_STEP_ADVANCED event (see Ems_RegisterEvents), not from Engine internals.
     Addon.testStartSequence = Addon.lastActiveSequence
@@ -3801,6 +4157,15 @@ ROTATION_EXCLUDE = {
     -- Movement (detected by spell school/mechanic — these are the universal names)
     -- Class-specific entries removed: addon now relies on GRIP-EMS detection + SimC
     -- to determine what belongs in a rotation sequence.
+    -- Shapeshift forms: switching forms mid-fight is never a rotation action and drops
+    -- the current tank form (Cat/Moonkin out of Bear, etc.) — never suggest in a sequence.
+    ["Cat Form"] = true, ["Bear Form"] = true, ["Moonkin Form"] = true,
+    ["Tree of Life"] = true, ["Travel Form"] = true, ["Aquatic Form"] = true,
+    ["Flight Form"] = true, ["Swift Flight Form"] = true,
+    -- Heart of the Wild (druid class talent): activating it shifts the druid out of
+    -- Bear/Cat form mid-fight — never include in a tanking/dummy sequence. Both SimC
+    -- titlecase-variant casings are covered (SimCName produces "Heart Of The Wild").
+    ["Heart of the Wild"] = true, ["Heart Of The Wild"] = true,
 }
 
 local _validSpellCache = {}
@@ -7770,6 +8135,27 @@ end
 
 C_Timer.After(0, function()
     playerGUID = UnitGUID("player")
+    local okName, nm = pcall(UnitName, "player")
+    if okName and nm then playerName = nm end
+    -- EDIT#5: CVar gate. If Blizzard's built-in damage meter is disabled, its
+    -- session data is unavailable to addons — the #1 cause of zero damage.
+    local okCvar, cvarVal = pcall(GetCVarBool, "damageMeterEnabled")
+    if not okCvar or not cvarVal then
+        print("|cffff4444[DummyAnalyzer]|r Warning: Blizzard Damage Meter is DISABLED (damageMeterEnabled=false). /dummy tests will show no damage until you enable it: /console damageMeterEnabled 1")
+    end
+    -- EDIT#2: real Midnight damage-meter events mark the session settled so the
+    -- report can avoid blind retry loops.
+    local meterEventFrame = CreateFrame("Frame")
+    meterEventFrame:RegisterEvent("DAMAGE_METER_COMBAT_SESSION_UPDATED")
+    meterEventFrame:RegisterEvent("DAMAGE_METER_CURRENT_SESSION_UPDATED")
+    meterEventFrame:RegisterEvent("DAMAGE_METER_RESET")
+    meterEventFrame:SetScript("OnEvent", function(_, event)
+        if event == "DAMAGE_METER_COMBAT_SESSION_UPDATED" or event == "DAMAGE_METER_CURRENT_SESSION_UPDATED" then
+            meterEventSeen = true
+        elseif event == "DAMAGE_METER_RESET" then
+            meterEventSeen = false
+        end
+    end)
     local initDb = GetCharDB()
     if initDb.bestSequence then Addon.bestSequence = initDb.bestSequence end
     CreateMainFrame()
