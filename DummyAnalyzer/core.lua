@@ -3507,7 +3507,7 @@ local function RefreshSavedLogsList()
     local yOffset = 0
     for i, log in ipairs(logs) do
         local rowFrame = CreateStyledFrame("Frame", nil, container)
-        rowFrame:SetSize(480, 28)
+        rowFrame:SetSize(480, 44)
         rowFrame:SetPoint("TOPLEFT", container, "TOPLEFT", 0, yOffset)
 
         local checkBtn = CreateStyledFrame("Button", nil, rowFrame)
@@ -3540,14 +3540,26 @@ local function RefreshSavedLogsList()
         local castsStr = log.totalCasts or "?"
         local simcFlag = log.isSimC and "|cff00ccff[SimC]|r " or ""
         local labelText = rowFrame:CreateFontString(nil, "OVERLAY")
-        SafeSetFont(labelText, MAIN_FONT, 11)
-        labelText:SetText(string.format("%s%s | %s | %s DPS | %d casts", simcFlag, log.label or "#" .. (log.id or "?"), durStr, dpsStr, castsStr))
-        labelText:SetPoint("LEFT", checkBtn, "RIGHT", 8, 0)
+        SafeSetFont(labelText, BOLD_FONT, 12)
+        labelText:SetText(string.format("%s%s", simcFlag, log.label or ("#" .. (log.id or "?"))))
+        labelText:SetPoint("TOPLEFT", checkBtn, "TOPLEFT", 0, -2)
+        labelText:SetPoint("TOPRIGHT", rowFrame, "TOPRIGHT", -8, -2)
+        labelText:SetJustifyH("LEFT")
+        labelText:SetHeight(14)
         labelText:SetTextColor(
             log.isSimC and 0.3 or C.text[1],
             log.isSimC and 0.8 or C.text[2],
             log.isSimC and 1.0 or C.text[3],
             C.text[4])
+
+        local statText = rowFrame:CreateFontString(nil, "OVERLAY")
+        SafeSetFont(statText, MAIN_FONT, 11)
+        statText:SetText(string.format("%s DPS  |  %d casts  |  %s", dpsStr, castsStr, durStr))
+        statText:SetPoint("BOTTOMLEFT", checkBtn, "BOTTOMLEFT", -2, 3)
+        statText:SetPoint("BOTTOMRIGHT", rowFrame, "BOTTOMRIGHT", -8, 3)
+        statText:SetJustifyH("LEFT")
+        statText:SetHeight(14)
+        statText:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3], 1)
 
         table.insert(savedLogsFrame.rows, {
             frame = rowFrame,
@@ -3555,7 +3567,7 @@ local function RefreshSavedLogsList()
             checked = false,
         })
 
-        yOffset = yOffset - 30
+        yOffset = yOffset - 46
     end
 
     container:SetHeight(math.abs(yOffset) + 10)
@@ -8034,6 +8046,8 @@ function Addon.ShowCombatLogImportDialog()
     scrollFrame:SetScrollChild(editBox)
     editBox:SetHeight(300)
 
+    local importBtn
+
     local function doImport()
         local text = editBox:GetText() or ""
         if not text or text == "" then
@@ -8082,7 +8096,7 @@ function Addon.ShowCombatLogImportDialog()
     bottomBar:SetBackdropColor(C.bg[1], C.bg[2], C.bg[3], C.bg[4])
     bottomBar:SetFrameLevel(clogDialog:GetFrameLevel() + 5)
 
-    local importBtn = CreateStyledButton(bottomBar, "Import", 100, 30, doImport, "primary")
+    importBtn = CreateStyledButton(bottomBar, "Import", 100, 30, doImport, "primary")
     importBtn:SetPoint("RIGHT", bottomBar, "CENTER", -55, 0)
     importBtn:SetFrameLevel(bottomBar:GetFrameLevel() + 2)
 
