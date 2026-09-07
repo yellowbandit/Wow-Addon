@@ -472,6 +472,10 @@ local playerName = nil
 local meterDiag = nil
 local meterReadError = nil
 local damageFromEnemyFallback = false
+local damageFromHealthFallback = false
+local healthBaseHp = nil
+local healthTotal = 0
+local healthTrackReady = false
 local meterEventSeen = false
 local BuildMeterDiag
 local pendingReport = false
@@ -1327,8 +1331,50 @@ local function PollTargetDebuffs()
     end
 end
 
+local function ResetHealthFallback()
+    healthBaseHp = nil
+    healthTotal = 0
+    healthTrackReady = false
+    damageFromHealthFallback = false
+end
+
+-- Track the training dummy's health bar so totalDamage still works even when
+-- Blizzard's built-in damage meter is disabled (user preference). Accumulates
+-- positive health deltas on "target"; a spike upward (dummy reset/re-target)
+-- only re-baselines without counting. Health may be a secret value in some
+-- contexts, so every read is pcall-guarded and skipped if we can't read it.
+local function TrackTargetHealth()
+    if not testActive then return end
+    local okMax, mhp = pcall(UnitHealthMax, "target")
+    if not okMax or type(mhp) ~= "number" or IsSecretValue(mhp) then
+        healthTrackReady = false
+        return
+    end
+    if mhp <= 0 then return end
+    local okCur, hp = pcall(UnitHealth, "target")
+    if not okCur or type(hp) ~= "number" or IsSecretValue(hp) then
+        healthTrackReady = false
+        return
+    end
+    if hp < 0 then hp = 0 end
+    if hp > mhp then hp = mhp end
+    if not healthBaseHp then
+        healthBaseHp = hp
+        healthTotal = 0
+        healthTrackReady = true
+        return
+    end
+    local delta = healthBaseHp - hp
+    if delta > 0 then
+        healthTotal = healthTotal + delta
+    end
+    healthBaseHp = hp
+    healthTrackReady = true
+end
+
 local function PollTestMetrics()
     CaptureCombatSnapshot(false)
+    TrackTargetHealth()
     PollPlayerBuffs()
     PollTargetDebuffs()
 end
@@ -2963,7 +3009,8 @@ local function GenerateReportText()
 
     if totalDamage > 0 then
         local dps = totalDamage / elapsed
-        local estSuffix = damageFromEnemyFallback and " (estimated from enemy damage taken)" or ""
+        local estSuffix = damageFromEnemyFallback and " (estimated from enemy damage taken)"
+            or (damageFromHealthFallback and " (estimated from dummy health)" or "")
         table.insert(lines, string.format("Total Dmg: %s%s", ShortNum(totalDamage), estSuffix))
         table.insert(lines, string.format("DPS: %s%s", ShortNum(dps), estSuffix))
     else
@@ -3986,6 +4033,13 @@ local function FinalizeReport()
     pendingReport = false
     ResetDamageData()
     ReadDamageMeterData()
+    if totalDamage == 0 and healthTrackReady and healthTotal > 0 then
+        totalDamage = healthTotal
+        damageFromHealthFallback = true
+        if debugMode then
+            print("|cff33ff33[DummyAnalyzer Debug]|r Damage meter empty, using target-health fallback: " .. ShortNum(totalDamage))
+        end
+    end
     if totalDamage == 0 and reportRetryCount < MAX_REPORT_RETRIES then
         reportRetryCount = reportRetryCount + 1
         if debugMode then
@@ -4069,6 +4123,7 @@ local function BeginActiveTest(minutes)
     currentDuration = minutes * 60
     spellHistory = {}
     ResetDamageData()
+    ResetHealthFallback()
     ResetBuffTracking()
     testActive = true
     startTime = GetTime()
@@ -4170,7 +4225,7 @@ ROTATION_EXCLUDE = {
 
 local _validSpellCache = {}
 local function IsValidMacroSpell(spellName)
-    if not spellName then _validSpellCache[spellName] = false; return false end
+    if not spellName then return false end
     if _validSpellCache[spellName] ~= nil then return _validSpellCache[spellName] end
     if ROTATION_EXCLUDE[spellName] then _validSpellCache[spellName] = false; return false end
     local itemID = GetItemInfoInstant(spellName)
@@ -5095,7 +5150,7 @@ GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, duratio
 	end
 	seqText = table.concat(seqLines, "\n")
 
-    -- Generate !EMS1! compressed import string
+    -- Generate !DA01! compressed import string
     if C_EncodingUtil then
         local actions = {}
         local seenAct  = {}
@@ -5181,7 +5236,7 @@ GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, duratio
             ok, base64 = pcall(C_EncodingUtil.EncodeBase64, compressed)
         end
         if ok and base64 then
-            importStr = "!EMS1!" .. base64
+            importStr = "!DA01!" .. base64
         end
     end
 
@@ -5582,7 +5637,7 @@ GenerateEMSImportString = function(castCounts, damageData, orderedSteps)
     local cbor = C_EncodingUtil.SerializeCBOR(payload)
     local compressed = C_EncodingUtil.CompressString(cbor)
     local base64 = C_EncodingUtil.EncodeBase64(compressed)
-    return "!EMS1!" .. base64, actionMacros
+    return "!DA01!" .. base64, actionMacros
 end
 
 -- ============================================
@@ -8314,26 +8369,27 @@ local function Ems_PushImportExportProviders()
     if not emsPluginHandle then return end
     -- Import provider: detects our compressed format header, decodes via GenerateEMSImportString pipeline
     local ok1, reason1 = emsPluginHandle:RegisterImportProvider({
-        id = "dummyanalyzer_ems1",
-        name = "DummyAnalyzer !EMS1!",
+        id = "dummyanalyzer_da01",
+        name = "DummyAnalyzer !DA01!",
         Detect = function(_, text)
-            return type(text) == "string" and text:sub(1, 5) == "!EMS1!"
+            return type(text) == "string" and text:sub(1, 6) == "!DA01!"
         end,
         Parse = function(_, text)
-            -- Reuse the inverse of GenerateEMSImportString. We delegate to a fresh decode path.
             if not C_EncodingUtil then return nil end
-            local ok, payload = pcall(C_EncodingUtil.DeserializeCBOR, text:sub(6) or "")
-            if not ok or type(payload) ~= "table" then return nil end
-            local deflated = payload.d
-            if type(deflated) ~= "string" then return nil end
-            local raw = C_EncodingUtil.DecompressString and C_EncodingUtil.DecompressString(deflated) or deflated
-            if type(raw) ~= "string" then return nil end
-            local steps = {}
-            for s in raw:gmatch("[^\n]+") do
-                local clean = s:gsub("^%s*/cast%s+%[?combat%]?%s*", ""):gsub("^%s*", ""):gsub("%s*$", "")
-                if clean ~= "" then steps[#steps + 1] = clean end
+            local encoded = text:sub(7) or ""
+            if encoded == "" then return nil end
+            local okDec, decoded = pcall(C_EncodingUtil.DecodeBase64, encoded)
+            if not okDec or type(decoded) ~= "string" then return nil end
+            if C_EncodingUtil.DecompressString then
+                local okDc, dc = pcall(C_EncodingUtil.DecompressString, decoded)
+                if okDc and type(dc) == "string" then decoded = dc end
             end
-            return { name = "DummyAnalyzer Imported", stepFunction = "sequential", versions = { [1] = { version = "1.0", stepFunction = "sequential", activeStepCount = #steps, steps = steps } } }
+            local ok, payload = pcall(C_EncodingUtil.DeserializeCBOR, decoded)
+            if not ok or type(payload) ~= "table" then return nil end
+            local seq = payload.sequence or payload.Sequences
+            if type(seq) ~= "table" then return nil end
+            -- Return the same shape S.Decode yields for a single sequence
+            return { name = type(payload.name) == "string" and payload.name or "DummyAnalyzer Imported", sequence = seq }
         end,
     })
     if not ok1 and debugMode then
@@ -8341,22 +8397,31 @@ local function Ems_PushImportExportProviders()
     end
     -- Export provider: invokes GenerateEMSImportString on a sequence name
     local ok2, reason2 = emsPluginHandle:RegisterExportProvider({
-        id = "dummyanalyzer_ems1",
-        name = "DummyAnalyzer !EMS1!",
+        id = "dummyanalyzer_da01",
+        name = "DummyAnalyzer !DA01!",
         Serialize = function(_, seq)
             if type(seq) ~= "table" or type(seq.versions) ~= "table" then return "" end
             local v = seq.versions[seq.activeVersionIndex or seq.defaultVersion or 1]
             if type(v) ~= "table" or type(v.steps) ~= "table" then return "" end
-            local castCounts, damageData = {}, {}
+            local castCounts, damageData, orderedSteps = {}, {}, {}
             for _, step in ipairs(v.steps) do
-                castCounts[step] = (castCounts[step] or 0) + 1
-                damageData[step] = { total = 0, hits = 0 }
+                local spellName = ExtractSpellName(step) or ExtractSpellFromSeqLine(step) or step
+                if spellName and spellName ~= "" then
+                    castCounts[spellName] = (castCounts[spellName] or 0) + 1
+                    damageData[spellName] = { total = 0, hits = 0 }
+                    local seen = false
+                    for _, s in ipairs(orderedSteps) do
+                        if s == spellName then seen = true; break end
+                    end
+                    if not seen then orderedSteps[#orderedSteps + 1] = spellName end
+                end
             end
+            if #orderedSteps == 0 then return "" end
             if C_EncodingUtil and GenerateEMSImportString then
-                local ok3, s = pcall(GenerateEMSImportString, castCounts, damageData)
-                if ok3 and s then return s end
+                local ok3, s = pcall(GenerateEMSImportString, castCounts, damageData, orderedSteps)
+                if ok3 and type(s) == "string" and s ~= "" then return s end
             end
-            return "!EMS1!export-error"
+            return "!DA01!export-error"
         end,
     })
     if not ok2 and debugMode then
