@@ -1447,6 +1447,16 @@ local function ShortNum(n)
 end
 Addon.ShortNum = ShortNum
 
+-- Clean display name for a saved log, skipping the stats text embedded in log.label
+local function LogDisplayName(log)
+    if not log then return "?" end
+    if log.detectedSeqName and log.detectedSeqName ~= "" then return log.detectedSeqName end
+    local name = string.match(log.label or "", "%[([^%]]+)%]$")
+    if name and name ~= "" then return name end
+    if log.isSimC then return "SimC Reference" end
+    return "#" .. (log.id or "?")
+end
+
 -- ============================================
 -- SAVED LOGS: Save / Delete / Compare
 -- ============================================
@@ -2776,8 +2786,8 @@ function Addon.CompareLogs(idA, idB)
     local lines = {}
     table.insert(lines, "=== COMPARISON ===")
     table.insert(lines, "")
-    local aLabel = logA.label or ("Log #" .. (logA.id or "?"))
-    local bLabel = logB.label or ("Log #" .. (logB.id or "?"))
+    local aLabel = LogDisplayName(logA)
+    local bLabel = LogDisplayName(logB)
     table.insert(lines, aLabel)
     table.insert(lines, bLabel)
     table.insert(lines, "")
@@ -3538,11 +3548,20 @@ local function RefreshSavedLogsList()
         local durStr = log.duration and string.format("%.1fs", log.duration) or "?"
         local dpsStr = log.dps and ShortNum(log.dps) or "?"
         local castsStr = log.totalCasts or "?"
+        local castsNum = tonumber(log.totalCasts) or 0
         local simcFlag = log.isSimC and "|cff00ccff[SimC]|r " or ""
+        local cleanName = log.detectedSeqName
+        if not cleanName and log.label then
+            local bn = string.match(log.label, "%[([^%]]+)%]$")
+            if bn then cleanName = bn end
+        end
+        if not cleanName then
+            cleanName = log.isSimC and "SimC Reference" or ("#" .. (log.id or "?"))
+        end
         local labelText = rowFrame:CreateFontString(nil, "OVERLAY")
         SafeSetFont(labelText, BOLD_FONT, 12)
-        labelText:SetText(string.format("%s%s", simcFlag, log.label or ("#" .. (log.id or "?"))))
-        labelText:SetPoint("TOPLEFT", checkBtn, "TOPLEFT", 0, -2)
+        labelText:SetText(string.format("%s%s", simcFlag, cleanName))
+        labelText:SetPoint("TOPLEFT", rowFrame, "TOPLEFT", 32, -2)
         labelText:SetPoint("TOPRIGHT", rowFrame, "TOPRIGHT", -8, -2)
         labelText:SetJustifyH("LEFT")
         labelText:SetHeight(14)
@@ -3554,8 +3573,8 @@ local function RefreshSavedLogsList()
 
         local statText = rowFrame:CreateFontString(nil, "OVERLAY")
         SafeSetFont(statText, MAIN_FONT, 11)
-        statText:SetText(string.format("%s DPS  |  %d casts  |  %s", dpsStr, castsStr, durStr))
-        statText:SetPoint("BOTTOMLEFT", checkBtn, "BOTTOMLEFT", -2, 3)
+        statText:SetText(string.format("%s DPS  |  %d casts  |  %s", dpsStr, castsNum, durStr))
+        statText:SetPoint("BOTTOMLEFT", rowFrame, "BOTTOMLEFT", 32, 3)
         statText:SetPoint("BOTTOMRIGHT", rowFrame, "BOTTOMRIGHT", -8, 3)
         statText:SetJustifyH("LEFT")
         statText:SetHeight(14)
@@ -6600,7 +6619,7 @@ ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, 
         if bestLog then
             local macros, ordered = ParseSequenceLines(bestLog.emsSeqText)
             if #macros > 0 then
-                local ctx = { logsCount = 1, logLabelById = { [bestLog.id or 0] = bestLog.label or ("Log #" .. tostring(bestLog.id or "?")) } }
+                local ctx = { logsCount = 1, logLabelById = { [bestLog.id or 0] = LogDisplayName(bestLog) } }
                 local deficit = ComputeDeficitSnapshot(bestLog.castCounts or {}, db.simcData, bestLog.duration or 1)
                 local display = BuildKidFriendlyDisplay("best", ctx, bestDPS, bestLog.duration or 1, macros, ordered, deficit)
                 local fullStepNames = {}
@@ -6620,7 +6639,7 @@ ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, 
                 importStr = ""; reasoningText = ""
                 HighlightTab(bestBtn)
                 SetEditText(GetSimcWarning() .. display)
-                print(string.format("|cff33ff33[DummyAnalyzer]|r Best sequence from log: %s (%s DPS)", bestLog.label or ("#" .. tostring(bestLog.id)), Addon.FormatNumber(bestDPS)))
+                print(string.format("|cff33ff33[DummyAnalyzer]|r Best sequence from log: %s (%s DPS)", LogDisplayName(bestLog), Addon.FormatNumber(bestDPS)))
                 return
             end
         end
@@ -6632,7 +6651,7 @@ ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, 
             local ctx = { logsCount = logCount, logLabelById = {} }
             for _, log in ipairs(db.logs) do
                 if not log.isSimC then
-                    ctx.logLabelById[log.id or 0] = log.label or ("log #" .. tostring(log.id or "?"))
+                    ctx.logLabelById[log.id or 0] = LogDisplayName(log)
                 end
             end
             local deficit = ComputeDeficitSnapshot(aggCast, db.simcData, totalDuration)
@@ -6738,7 +6757,7 @@ ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, 
             for _, log in ipairs(db5.logs) do
                 if not log.isSimC and not ctx.id then
                     ctx.id = log.id or 0
-                    ctx.logLabel = log.label or ("Log #" .. tostring(ctx.id))
+                    ctx.logLabel = LogDisplayName(log)
                 end
             end
             local deficit = ComputeDeficitSnapshot(castCounts, db5.simcData, playerDuration)
@@ -6931,7 +6950,7 @@ local function ShowEMSComparison(selectedIds)
     local logData = {}
     for _, log in ipairs(selectedLogs) do
         local dpsStr = Addon.FormatNumber(log.dps or 0)
-        local label = log.label or ("Log #" .. log.id)
+        local label = LogDisplayName(log)
         table.insert(lines, string.format("\n\n=== %s (%s DPS) ===", label, dpsStr))
 
         -- Build ensure list from detected steps so cooldowns are never dropped
@@ -7456,7 +7475,7 @@ local function ShowEMSExportWindow()
         emsWindow.rows = {}
         local prevBtn = nil
         for i, log in ipairs(logs) do
-            local label = log.label or ("Log #" .. log.id)
+            local label = LogDisplayName(log)
             local specName = log.specName or ""
             local elapsed = log.duration or 0
             local dps = log.dps or 0
