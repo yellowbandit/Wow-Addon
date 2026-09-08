@@ -15,6 +15,14 @@ local function RecordKnownBuffCast(spellId, spellName) return Addon.RecordKnownB
 -- Forward declaration (moved from Init range line 480). Assigned + used only here.
 local BuildMeterDiag
 
+-- In-combat meter snapshot state. MUST be declared above ReadDamageMeterData:
+-- it reads combatSnapValid/Total at the top of the file, so placing these
+-- locals below that function would resolve them to nil globals and dead-code
+-- the snapshot fallback (a real bug found after the split).
+local combatSnapTotal = 0
+local combatSnapData = {}
+local combatSnapValid = false
+
 local function ResetDamageData()
     Addon.damageData = {}
     Addon.totalDamage = 0
@@ -443,9 +451,6 @@ end
 -- delta, so damage data survives even if the post-combat read returns nothing.
 -- ============================================
 local meterSessionLast = {}
-local combatSnapTotal = 0
-local combatSnapData = {}
-local combatSnapValid = false
 
 local function MergeMeterSpellDelta(amount, spell)
     if not (amount and amount > 0) or type(spell) ~= "table" then return end
