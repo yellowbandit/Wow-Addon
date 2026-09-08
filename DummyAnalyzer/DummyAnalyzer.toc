@@ -20,6 +20,7 @@ SavedLogsBrowser.lua
 TestControl.lua
 SequenceCore.lua
 SequenceOptimizer.lua
+SequenceBuilder.lua
 SequenceFeed.lua
 MainUI.lua
 PluginHandshake.lua
