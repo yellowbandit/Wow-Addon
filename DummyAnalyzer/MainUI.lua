@@ -1326,12 +1326,8 @@ C_Timer.After(0, function()
     Addon.playerGUID = UnitGUID("player")
     local okName, nm = pcall(UnitName, "player")
     if okName and nm then Addon.playerName = nm end
-    -- EDIT#5: CVar gate. If Blizzard's built-in damage meter is disabled, its
-    -- session data is unavailable to addons — the #1 cause of zero damage.
-    local okCvar, cvarVal = pcall(GetCVarBool, "damageMeterEnabled")
-    if not okCvar or not cvarVal then
-        print("|cffff4444[DummyAnalyzer]|r Warning: Blizzard Damage Meter is DISABLED (damageMeterEnabled=false). /dummy tests will show no damage until you enable it: /console damageMeterEnabled 1")
-    end
+    -- No CVar gate/warning: the addon does not depend on Blizzard's built-in
+    -- damage meter (meter-free health fallback + in-combat snapshot handle it).
     -- EDIT#2: real Midnight damage-meter events mark the session settled so the
     -- report can avoid blind retry loops.
     local meterEventFrame = CreateFrame("Frame")
