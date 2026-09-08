@@ -21,8 +21,72 @@ local function ResetDamageData()
     Addon.damageFromEnemyFallback = false
 end
 
+-- Amounts can live under several keys depending on the C_DamageMeter build and
+-- whether the built-in meter UI is enabled (meter-disabled users see lists but
+-- nil "totalAmount"). Try every known alias before giving up; also sum per-spell
+-- rows as a last resort when the block-level aggregate is missing.
+local function SpellTotal(spell)
+    if type(spell) ~= "table" then return 0 end
+    local v = SafeTableGet(spell, "totalAmount")
+    if not v or v <= 0 then v = SafeTableGet(spell, "amount") end
+    if not v or v <= 0 then v = SafeTableGet(spell, "total") end
+    if not v or v <= 0 then v = SafeTableGet(spell, "damage") end
+    return NumberOrZero(v)
+end
+
+-- SpellTotal + hit-by-hit detail amounts (used by the live in-combat capture
+-- when block/spell totals are nil, which is exactly what meter-disabled users
+-- see).
+local function SpellTotalWithDetails(spell)
+    local v = SpellTotal(spell)
+    if v > 0 then return v end
+    local details = type(spell) == "table" and SafeTableGet(spell, "combatSpellDetails")
+    if type(details) == "table" then
+        for _, d in ipairs(details) do
+            if type(d) == "table" then
+                v = v + NumberOrZero(SafeTableGet(d, "amount"))
+            end
+        end
+    end
+    return NumberOrZero(v)
+end
+
+-- Forward declaration: MeterSourceTotal (below) calls MeterSourceSpells, which
+-- is assigned later in this chunk. Lua locals are in scope only after their
+-- declaration, so declare the name up-front and assign afterwards.
+local MeterSourceSpells
+
 local function MeterSourceTotal(block)
-    return NumberOrZero(SafeTableGet(block, "totalAmount")) 
+    if type(block) ~= "table" then return 0 end
+    local v = SafeTableGet(block, "totalAmount")
+    if not v or v <= 0 then v = SafeTableGet(block, "amount") end
+    if not v or v <= 0 then v = SafeTableGet(block, "total") end
+    if not v or v <= 0 then v = SafeTableGet(block, "damage") end
+    if not v or v <= 0 then
+        -- Block aggregate missing/nil: sum the per-spell totals. Each spell row
+        -- may carry a totalAmount OR hit-by-hit combatSpellDetails with `amount`;
+        -- sum whichever is present.
+        local spells = MeterSourceSpells(block)
+        if type(spells) == "table" then
+            local sum = 0
+            for _, spell in ipairs(spells) do
+                local st = SpellTotal(spell)
+                if not st or st <= 0 then
+                    local details = type(spell) == "table" and SafeTableGet(spell, "combatSpellDetails")
+                    if type(details) == "table" then
+                        for _, d in ipairs(details) do
+                            if type(d) == "table" then
+                                st = st + NumberOrZero(SafeTableGet(d, "amount"))
+                            end
+                        end
+                    end
+                end
+                sum = sum + st
+            end
+            v = sum
+        end
+    end
+    return NumberOrZero(v)
 end
 
 local function SameGuid(a, b)
@@ -32,7 +96,7 @@ local function SameGuid(a, b)
     return ok and eq == true
 end
 
-local function MeterSourceSpells(block)
+MeterSourceSpells = function(block)
     local spells = SafeTableGet(block, "combatSpells")
     if type(spells) ~= "table" then
         spells = SafeTableGet(block, "spells")
@@ -54,7 +118,17 @@ local function AddMeterSource(block)
                 if not name or name == "" then
                     return
                 end
-                local totalAmt = NumberOrZero(SafeTableGet(spell, "totalAmount"))
+                local totalAmt = SpellTotal(spell)
+                if not totalAmt or totalAmt <= 0 then
+                    local details0 = SafeTableGet(spell, "combatSpellDetails")
+                    if type(details0) == "table" then
+                        for _, d0 in ipairs(details0) do
+                            if type(d0) == "table" then
+                                totalAmt = totalAmt + NumberOrZero(SafeTableGet(d0, "amount"))
+                            end
+                        end
+                    end
+                end
                 local aps = NumberOrZero(SafeTableGet(spell, "amountPerSecond"))
                 local overkill = NumberOrZero(SafeTableGet(spell, "overkillAmount"))
                 local details = SafeTableGet(spell, "combatSpellDetails")
@@ -277,6 +351,21 @@ end
         return ok and isSec and "YES" or "no"
     end
 
+    -- Dump the actual keys present on a block/spell row so the report shows what
+    -- the meter really returns for a meter-disabled user (field names vary).
+    local function DiagKeys(tbl, maxItems)
+        if type(tbl) ~= "table" then return tostring(tbl) end
+        local keys = {}
+        for k in pairs(tbl) do
+            table.insert(keys, tostring(k))
+        end
+        table.sort(keys)
+        if maxItems and #keys > maxItems then
+            return table.concat(keys, ",", 1, maxItems) .. ",..."
+        end
+        return table.concat(keys, ",")
+    end
+
  BuildMeterDiag = function()
     local out = {}
     if Addon.meterReadError then
@@ -312,7 +401,11 @@ end
                         end
                     end
                     local okPS, playerSource = pcall(C_DamageMeter.GetCombatSessionSourceFromID, id, 0, Addon.playerGUID)
-                    table.insert(out, "    PlayerSource(id," .. tostring(id) .. ") " .. (okPS and (type(playerSource) == "table" and ("spells=" .. tostring(#(MeterSourceSpells(playerSource) or {})) .. " total=" .. tostring(SafeTableGet(playerSource, "totalAmount"))) or tostring(playerSource)) or "FAILED"))
+                    table.insert(out, "    PlayerSource(id," .. tostring(id) .. ") " .. (okPS and (type(playerSource) == "table" and ("spells=" .. tostring(#(MeterSourceSpells(playerSource) or {})) .. " total=" .. tostring(SafeTableGet(playerSource, "totalAmount")) .. " keys={" .. DiagKeys(playerSource, 12) .. "}") or tostring(playerSource)) or "FAILED"))
+                    local psSpells = MeterSourceSpells(playerSource)
+                    if type(playerSource) == "table" and type(psSpells) == "table" and psSpells[1] and type(psSpells[1]) == "table" then
+                        table.insert(out, "      firstSpell keys={" .. DiagKeys(psSpells[1], 12) .. "} totals=" .. tostring(SpellTotal(psSpells[1])))
+                    end
                 else
                     table.insert(out, "    GetCombatSessionFromID FAILED" .. (okCS and (" nil=" .. tostring(cs)) or ""))
                 end
@@ -394,7 +487,7 @@ local function AccumulateSourceDelta(key, src)
         if type(spell) == "table" then
             local spellID = SafeTableGet(spell, "spellID")
             if spellID then
-                local curTotal = NumberOrZero(SafeTableGet(spell, "totalAmount"))
+                local curTotal = SpellTotalWithDetails(spell)
                 local prevTotal = last.spells[spellID] or 0
                 local delta = curTotal - prevTotal
                 if delta < 0 then delta = curTotal end -- session reset
@@ -437,7 +530,7 @@ local function CaptureCombatSnapshot(baselineOnly)
                                     local last = {}
                                     for _, spell in ipairs(spells) do
                                         if type(spell) == "table" and SafeTableGet(spell, "spellID") then
-                                            last[SafeTableGet(spell, "spellID")] = NumberOrZero(SafeTableGet(spell, "totalAmount"))
+                                            last[SafeTableGet(spell, "spellID")] = SpellTotal(spell)
                                         end
                                     end
                                     meterSessionLast[key] = last
@@ -463,7 +556,7 @@ local function CaptureCombatSnapshot(baselineOnly)
                     local last = {}
                     for _, spell in ipairs(spells) do
                         if type(spell) == "table" and SafeTableGet(spell, "spellID") then
-                            last[SafeTableGet(spell, "spellID")] = NumberOrZero(SafeTableGet(spell, "totalAmount"))
+                            last[SafeTableGet(spell, "spellID")] = SpellTotal(spell)
                         end
                     end
                     meterSessionLast["legacy"] = last
