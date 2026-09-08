@@ -721,14 +721,6 @@ end, "secondary")
     end, "secondary")
     simcBtn:SetPoint("LEFT", compBtn, "RIGHT", 5, 0)
 
-    local debugBtn = CreateStyledButton(emsWindow, "Debug", 80, 28, function()
-        ShowDebugReport()
-    end, "tertiary")
-    debugBtn:SetPoint("LEFT", simcBtn, "RIGHT", 5, 0)
-
-    local clogBtn = CreateStyledButton(emsWindow, "CL Import", 100, 28, Addon.ShowCombatLogImportDialog, "secondary")
-    clogBtn:SetPoint("LEFT", debugBtn, "RIGHT", 5, 0)
-
     RefreshEMSLogList()
     RegisterAddonWindow(emsWindow)
     emsWindow:Show()
@@ -953,7 +945,7 @@ local function CreateMainFrame()
     end, "primary")
     savedLogsBtn:SetPoint("TOPLEFT", instrText, "BOTTOMLEFT", 0, -70)
 
-    local emsBtn = CreateStyledButton(content, "Export Sequence", 140, 32, function()
+    local emsBtn = CreateStyledButton(content, "Create Sequence", 140, 32, function()
         if mainFrame then mainFrame:Hide() end
         ShowEMSExportWindow()
     end, "primary")

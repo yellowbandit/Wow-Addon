@@ -3,6 +3,7 @@ local AddonName, Addon = ...
 -- EMS IMPORT STRING GENERATION + ITERATIVE FEEDBACK + EXPORT DIALOG
 -- ============================================
 local GetCharDB = Addon.GetCharDB
+local SafeTableGet = Addon.SafeTableGet
 local NumberOrZero = Addon.NumberOrZero
 local DebugLog = Addon.DebugLog
 local C = Addon.C
@@ -702,7 +703,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
     titleBar:SetBackdropColor(C.title[1], C.title[2], C.title[3], C.title[4])
     local titleText = titleBar:CreateFontString(nil, "OVERLAY")
     SafeSetFont(titleText, BOLD_FONT, 15)
-    titleText:SetText(suggestMode and "Suggested Sequence" or "Export Sequence")
+    titleText:SetText(suggestMode and "Suggested Sequence" or "Create Sequence")
     titleText:SetPoint("CENTER")
     titleText:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
 
@@ -820,134 +821,30 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         table.sort(pool)
         return pool
     end
-    local spellPool = BuildSpellPool()
-    local MAX_REQ_SLOTS = 8
-
-    -- Required spells: a self-contained inner panel (visually its own thing)
-    local reqPanel = CreateFrame("Frame", nil, exportDialog, "BackdropTemplate")
-    reqPanel:SetPoint("TOPLEFT", exportDialog, "TOPLEFT", 16, -86)
-    reqPanel:SetPoint("RIGHT", exportDialog, "RIGHT", -16, 0)
-    reqPanel:SetHeight(120)
-    ApplyBackdrop(reqPanel, false)
-
-    -- Panel header
-    local reqPanelHeader = reqPanel:CreateFontString(nil, "OVERLAY")
-    SafeSetFont(reqPanelHeader, BOLD_FONT, 11)
-    reqPanelHeader:SetPoint("TOPLEFT", reqPanel, "TOPLEFT", 8, -8)
-    reqPanelHeader:SetText("Required Spells")
-    reqPanelHeader:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], 0.9)
-
-    local reqPanelHint = reqPanel:CreateFontString(nil, "OVERLAY")
-    SafeSetFont(reqPanelHint, FONT, 10)
-    reqPanelHint:SetPoint("LEFT", reqPanelHeader, "RIGHT", 12, 0)
-    reqPanelHint:SetText("(use [+ Add Required Spell] to select spells that must be in the sequence)")
-    reqPanelHint:SetTextColor(C.text[1], C.text[2], C.text[3], 0.6)
-    reqPanelHint:SetJustifyH("LEFT")
-
-    -- Required spells label
-    local reqLabel = reqPanel:CreateFontString(nil, "OVERLAY")
-    SafeSetFont(reqLabel, FONT, 12)
-    reqLabel:SetPoint("TOPLEFT", reqPanel, "TOPLEFT", 24, -28)
-    reqLabel:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], 0.9)
-    reqLabel:SetText("Required spells (forced into sequence):")
-    reqLabel:SetJustifyH("LEFT")
-
-    -- Container holds all rows; grows in height as rows are added
-    local reqContainer = CreateFrame("Frame", nil, reqPanel)
-    reqContainer:SetPoint("TOPLEFT", reqPanel, "TOPLEFT", 24, -48)
-    reqContainer:SetPoint("RIGHT", reqPanel, "RIGHT", -24, 0)
-    reqContainer:SetHeight(1)
-
-    -- Row storage: each entry {label, dropdown, removeBtn, selection}
-    local reqRows = {}
-    local function ReflowRowPositions(startFrom)
-        for i = startFrom or 1, #reqRows do
-            local r = reqRows[i]
-            local yOff = (i - 1) * 26
-            r.label:SetPoint("TOPLEFT", reqContainer, "TOPLEFT", 0, -yOff)
-            r.dropdown:SetPoint("TOPLEFT", reqContainer, "TOPLEFT", 28, -yOff - 4)
-            r.removeBtn:SetPoint("RIGHT", reqContainer, "RIGHT", -4, -yOff - 2)
+    -- Required spells come from Configure -> Required Spells tab (persisted in settings)
+    local CollectRequiredSpells
+    do
+        local function impl()
+            local db = GetCharDB()
+            local spells = (db.settings or {}).requiredSpells
+            if spells and #spells > 0 then
+                local required = {}
+                local seen = {}
+                for _, name in ipairs(spells) do
+                    if name and name ~= "" and not seen[name] then
+                        seen[name] = true
+                        required[#required + 1] = name
+                    end
+                end
+                return #required > 0 and required or nil
+            end
+            return nil
         end
-        reqContainer:SetHeight(math.max(1, #reqRows * 26))
+        CollectRequiredSpells = impl
     end
-    local function InitDropdown(r, pool)
-        UIDropDownMenu_SetText(r.dropdown, r.selection or "")
-        UIDropDownMenu_Initialize(r.dropdown, function(self, level)
-            local items = {}
-            for _, spellName in ipairs(pool) do
-                items[#items + 1] = { text = spellName, arg1 = spellName }
-            end
-            for _, it in ipairs(items) do
-                local info = UIDropDownMenu_CreateInfo()
-                info.text = it.text
-                info.arg1 = it.arg1
-                info.checked = (it.arg1 == r.selection)
-                info.func = function(selfArg)
-                    r.selection = selfArg.arg1
-                    UIDropDownMenu_SetSelectedValue(r.dropdown, selfArg.arg1)
-                    UIDropDownMenu_SetText(r.dropdown, selfArg.arg1 or "")
-                    CloseDropDownMenus()
-                end
-                UIDropDownMenu_AddButton(info)
-            end
-        end)
-        UIDropDownMenu_SetWidth(r.dropdown, 300, 0)
-    end
-    local CollectRequiredSpells -- forward decl; resolved below before suggestMode runs
-    local function ResizeReqPanel()
-        local headerH = 28
-        local labelH = 22
-        local rowH = 26
-        local btnH = 30
-        local pad = 12
-        local rowsH = math.max(rowH, #reqRows * rowH)
-        reqPanel:SetHeight(headerH + labelH + rowsH + btnH + pad)
-    end
-    local function AddReqRow()
-        if #reqRows >= MAX_REQ_SLOTS then return end
-        local idx = #reqRows + 1
-        local label = reqContainer:CreateFontString(nil, "OVERLAY")
-        SafeSetFont(label, FONT, 12)
-        label:SetJustifyH("RIGHT")
-        label:SetText(tostring(idx) .. ".")
-        local dropdown = CreateFrame("Frame", nil, reqContainer, "UIDropDownMenuTemplate")
-        dropdown:SetSize(300, 22)
-        local removeBtn
-        removeBtn = CreateStyledButton(reqContainer, "x", 24, 22, function()
-            dropdown:Hide()
-            removeBtn:Hide()
-            label:SetText("")
-            local newRows = {}
-            for i, row in ipairs(reqRows) do
-                if i ~= idx then
-                    newRows[#newRows + 1] = row
-                    row.label:SetText(tostring(#newRows) .. ".")
-                end
-            end
-            reqRows = newRows
-            ReflowRowPositions()
-            ResizeReqPanel()
-            if addSlotBtn then addSlotBtn:SetEnabled(#reqRows < MAX_REQ_SLOTS) end
-        end)
-        removeBtn:SetFrameLevel(dropdown:GetFrameLevel() + 5)
-        local r = { label = label, dropdown = dropdown, removeBtn = removeBtn, selection = nil }
-        reqRows[idx] = r
-        InitDropdown(r, spellPool)
-        ReflowRowPositions()
-        ResizeReqPanel()
-        if addSlotBtn then addSlotBtn:SetEnabled(#reqRows < MAX_REQ_SLOTS) end
-    end
-
-    -- "+ Add Slot" button (lives on the panel border bottom)
-    addSlotBtn = CreateStyledButton(reqPanel, "+ Add Required Spell", 200, 22, function()
-        AddReqRow()
-    end)
-    addSlotBtn:SetPoint("BOTTOMLEFT", reqPanel, "BOTTOMLEFT", 8, 6)
-    addSlotBtn:SetEnabled(true)
-    ResizeReqPanel()
 
     local scrollFrame = CreateFrame("ScrollFrame", nil, exportDialog, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", reqPanel, "BOTTOMLEFT", 0, -10)
+    scrollFrame:SetPoint("TOPLEFT", exportDialog, "TOPLEFT", 16, -86)
     scrollFrame:SetPoint("BOTTOMRIGHT", exportDialog, "BOTTOMRIGHT", -25, 50)
 
     local editBox = CreateFrame("EditBox", nil, scrollFrame)
@@ -959,22 +856,6 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
     editBox:EnableMouse(true)
     editBox:SetScript("OnEscapePressed", function() editBox:ClearFocus() end)
     scrollFrame:SetScrollChild(editBox)
-
-    -- Must be defined before suggestMode block runs (uses CollectRequiredSpells at L4791)
-    do
-        local function impl()
-            local required = {}
-            local seen = {}
-            for _, r in ipairs(reqRows) do
-                if r.selection and r.selection ~= "" and not seen[r.selection] then
-                    seen[r.selection] = true
-                    required[#required + 1] = r.selection
-                end
-            end
-            return #required > 0 and required or nil
-        end
-        CollectRequiredSpells = impl
-    end
 
     -- Compute data BEFORE closures (Lua 5.1: locals must be declared before use)
     local seqText, importStr, reasoningText
@@ -1036,9 +917,9 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         scrollFrame:SetVerticalScroll(0)
     end
 
-    local emsBtn, bestBtn, nextBtn, simcBtn
+    local bestBtn, nextBtn, simcBtn
     local function ClearHighlights()
-        for _, b in ipairs({bestBtn, simcBtn, nextBtn, emsBtn}) do
+        for _, b in ipairs({bestBtn, simcBtn, nextBtn}) do
             if b then
                 b._isSelected = false
                 b:SetBackdropColor(C.btn[1], C.btn[2], C.btn[3], C.btn[4])
@@ -1295,15 +1176,6 @@ HighlightTab(nextBtn)
         end
     end)
     nextBtn:SetPoint("LEFT", simcBtn, "RIGHT", 10, 0)
-
-    -- "EMS Import" — show ONLY the current EMS import string
-    emsBtn = CreateStyledButton(tabRow, "EMS Import", 120, 28, function()
-        HighlightTab(emsBtn)
-        local warn = GetSimcWarning()
-        local body = importStr or err or "Failed to generate import string."
-        SetEditText(warn .. body)
-    end)
-    emsBtn:SetPoint("LEFT", nextBtn, "RIGHT", 10, 0)
 
     local bottomRow = CreateFrame("Frame", nil, exportDialog)
     bottomRow:SetPoint("BOTTOMLEFT", exportDialog, "BOTTOMLEFT", 10, 8)
