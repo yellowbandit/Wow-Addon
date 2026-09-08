@@ -7,4 +7,19 @@
 ## SavedVariables: DummyAnalyzerDB
 ## Dependencies: GRIP-EMS
 
-core.lua
+Init.lua
+SavedLogsDb.lua
+FormatHelpers.lua
+DamageTracking.lua
+BuffTracking.lua
+SavedLogsLogic.lua
+SimCImport.lua
+ReportGen.lua
+ReportWindow.lua
+SavedLogsBrowser.lua
+TestControl.lua
+SequenceCore.lua
+SequenceOptimizer.lua
+SequenceFeed.lua
+MainUI.lua
+PluginHandshake.lua
