@@ -159,11 +159,11 @@ Addon.BuildSequence = function(orderedSpellNames, cfg, intervalOverrides)
         return nil, {}
     end
     local intervalMap = BuildIntervalMap(spells, cfg, intervalOverrides)
-    local actions
+    local actions = BuildActionsFromFlat(spells, intervalMap)
     if cfg.structure and type(cfg.structure) == "table" and #cfg.structure > 0 then
-        actions = BuildActionsFromStructure(cfg.structure)
-    else
-        actions = BuildActionsFromFlat(spells, intervalMap)
+        for _, act in ipairs(BuildActionsFromStructure(cfg.structure)) do
+            actions[#actions + 1] = act
+        end
     end
 
     local classID = select(3, UnitClass("player"))
@@ -200,6 +200,21 @@ Addon.BuildSequence = function(orderedSpellNames, cfg, intervalOverrides)
         sequence.specID = specID
     end
     return sequence, intervalMap
+end
+
+Addon.ValidateSequenceActions = function(actions)
+    local AC = _G.GRIPEMS and _G.GRIPEMS.ActionCompiler
+    if type(AC) ~= "table" or type(AC.ValidateActions) ~= "function" then
+        return nil, nil, nil
+    end
+    local ok, isValid, errors, warnings = pcall(AC.ValidateActions, actions)
+    if not ok then
+        return nil, nil, nil
+    end
+    if type(isValid) ~= "boolean" then isValid = nil end
+    if type(errors) ~= "table" then errors = nil end
+    if type(warnings) ~= "table" then warnings = nil end
+    return isValid, errors, warnings
 end
 
 Addon.SerializeEMSSequence = function(sequence, seqName)

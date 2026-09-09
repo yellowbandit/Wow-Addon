@@ -31,6 +31,53 @@ local GenerateGapReport = Addon.GenerateGapReport
 local function Ems_EnsureHandle() return Addon.Ems_EnsureHandle() end
 local function Ems_PushBestSequence(steps) return Addon.Ems_PushBestSequence(steps) end
 
+-- SetDropText: rewrite a CreateStyledButton's centered label (it has a single FontString region).
+local function SetDropText(btn, text)
+    for _, r in ipairs({ btn:GetRegions() }) do
+        if r.GetText and r:GetObjectType() == "FontString" then
+            r:SetText(text)
+            break
+        end
+    end
+end
+
+-- Shared styled dropdown: replaces Blizzard UIDropDownMenuTemplate (themed, no overflow).
+-- btn label text is rewritten via SetDropText; menu is a themed popup panel.
+local function MakeStyledDropdown(parent, options, default, onSelect, width)
+    local btn = CreateStyledButton(parent, tostring(default), width or 150, 22, nil)
+    local menu = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    ApplyBackdrop(menu, true)
+    menu:SetSize(btn:GetWidth(), #options * 24)
+    menu:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, -2)
+    menu:Hide()
+    local selected = default
+
+    local function BuildOptions()
+        for _, ch in ipairs({ menu:GetRegions() }) do
+            if ch.IsShown and ch:GetObjectType() == "Button" then ch:Hide() end
+        end
+        menu:SetHeight(#options * 24)
+        for i, opt in ipairs(options) do
+            local ob = CreateStyledButton(menu, tostring(opt), menu:GetWidth() - 8, 22, function()
+                selected = opt
+                if onSelect then onSelect(opt) end
+                SetDropText(btn, tostring(opt))
+                menu:Hide()
+            end)
+            ob:SetPoint("TOPLEFT", menu, "TOPLEFT", 4, -((i - 1) * 24 + 1))
+            if opt == selected then
+                ob:SetBackdropColor(C.selected[1], C.selected[2], C.selected[3], C.selected[4])
+            end
+        end
+    end
+
+    btn:SetScript("OnClick", function()
+        BuildOptions()
+        if menu:IsShown() then menu:Hide() else menu:Raise(); menu:Show() end
+    end)
+    return btn, menu
+end
+
 local function GenerateEMSImportString(castCounts, damageData, orderedSteps)
     if not castCounts or not next(castCounts) then return nil end
     if not C_EncodingUtil then return nil end
@@ -285,7 +332,7 @@ local function ShowConfigureDialog(parent)
         if lastTab then lastTab:SetBackdropColor(C.selected[1], C.selected[2], C.selected[3], C.selected[4]) end
     end
 
-    local tabNames = {"Playback", "Structure", "Spells", "Live"}
+    local tabNames = {"Playback", "Structure", "Spells"}
     for ti, tname in ipairs(tabNames) do
         local btn = CreateStyledFrame("Button", nil, tabRow)
         btn:SetPoint("LEFT", tabRow, "LEFT", (ti - 1) * 130, 0)
@@ -328,22 +375,8 @@ local function ShowConfigureDialog(parent)
         end
 
         local function MakeDropdown(options, default, onSelect)
-            local dd = CreateFrame("Frame", nil, panel, "UIDropDownMenuTemplate")
-            UIDropDownMenu_SetText(dd, default)
-            UIDropDownMenu_Initialize(dd, function()
-                for _, opt in ipairs(options) do
-                    local info = UIDropDownMenu_CreateInfo()
-                    info.text = opt
-                    info.func = function()
-                        onSelect(opt)
-                        UIDropDownMenu_SetText(dd, opt)
-                        CloseDropDownMenus()
-                    end
-                    UIDropDownMenu_AddButton(info)
-                end
-            end)
-            UIDropDownMenu_SetWidth(dd, CTRL_W, 0)
-            return dd
+            local btn, menu = MakeStyledDropdown(panel, options, default, onSelect, CTRL_W)
+            return btn
         end
 
         local function MakeCheckbox(initial, onToggle)
@@ -389,6 +422,19 @@ local function ShowConfigureDialog(parent)
             return cb
         end
 
+        local function PlaceHeader(text)
+            local hdr = panel:CreateFontString(nil, "OVERLAY")
+            SafeSetFont(hdr, BOLD_FONT, 11)
+            hdr:SetPoint("TOPLEFT", panel, "TOPLEFT", LABEL_X, -(currentY + 4))
+            hdr:SetText(text)
+            hdr:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], 0.85)
+            hdr:SetJustifyH("LEFT")
+            currentY = currentY + ROW_H
+        end
+
+        -- Solver knobs grouped separately from literal EMS sequence fields.
+        PlaceHeader("Copy expansion (solver):")
+
         -- Row 1
         PlaceLabel("Max consecutive repeats (0=unlimited):")
         PlaceEdit(s.maxRepeats or 3, function(eb)
@@ -409,6 +455,8 @@ local function ShowConfigureDialog(parent)
             local v = tonumber(eb:GetText()); if v and v >= 0 then s.minCopies = v else s.minCopies = 1 end
         end)
         currentY = currentY + ROW_H
+
+        PlaceHeader("EMS sequence fields:")
 
         -- Row 4
         PlaceLabel("Step Function:")
@@ -437,7 +485,7 @@ local function ShowConfigureDialog(parent)
         PlaceEdit(s.keyRelease or "", function(eb) s.keyRelease = eb:GetText() end)
         currentY = currentY + ROW_H
 
-        -- Row 8: Reset On — checkboxes equally spaced across available width
+        -- Row 8: Reset On — 2x2 grid so checkbox + label never clips
         PlaceLabel("Reset on:")
         local resetDefs = {
             {key = "resetOnCombat", label = "Combat", default = true},
@@ -445,19 +493,22 @@ local function ShowConfigureDialog(parent)
             {key = "resetOnGear",   label = "Gear",   default = false},
             {key = "resetOnSpec",   label = "Spec",   default = false},
         }
-        local resetSlotW = (PANEL_INNER_W - CTRL_X) / #resetDefs
-        for ri, rd in ipairs(resetDefs) do
-            local val = (s[rd.key] ~= nil) and s[rd.key] or rd.default
-            s[rd.key] = val
-            local cb = MakeCheckbox(val, function(v) s[rd.key] = v end)
-            cb:SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X + (ri - 1) * resetSlotW, -(currentY + 1))
-            local clbl = panel:CreateFontString(nil, "OVERLAY")
-            SafeSetFont(clbl, FONT, 11)
-            clbl:SetPoint("LEFT", cb, "RIGHT", 4, 0)
-            clbl:SetText(rd.label)
-            clbl:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
+        local resetSlotW = 130
+        for gi = 0, 1 do -- grid row 0 = Combat/Target, row 1 = Gear/Spec
+            for ci = 0, 1 do
+                local rd = resetDefs[gi * 2 + ci + 1]
+                local val = (s[rd.key] ~= nil) and s[rd.key] or rd.default
+                s[rd.key] = val
+                local cb = MakeCheckbox(val, function(v) s[rd.key] = v end)
+                cb:SetPoint("TOPLEFT", panel, "TOPLEFT", CTRL_X + ci * resetSlotW, -(currentY + 1))
+                local clbl = panel:CreateFontString(nil, "OVERLAY")
+                SafeSetFont(clbl, FONT, 11)
+                clbl:SetPoint("LEFT", cb, "RIGHT", 4, 0)
+                clbl:SetText(rd.label)
+                clbl:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
+            end
+            currentY = currentY + ROW_H
         end
-        currentY = currentY + ROW_H
 
         -- Row 9
         PlaceLabel("Reset timer (sec, 0=off):")
@@ -493,12 +544,13 @@ local function ShowConfigureDialog(parent)
         panel:SetHeight(tabHeights[1])
     end
 
-    -- Tab 2: Structure (authored node tree persisted to s.structure)
+    -- Tab 2: Structure (authored node TREE persisted to s.structure)
     do
         local panel = panels[2]
         local structY = 8
-        local nodeRows = {}
         local NODE_TYPES = {"action", "loop", "if", "pause", "embed"}
+        local rowFrames = {}    -- every frame created for rows/child-buttons (hidden each rebuild)
+        local nodeRows = {}     -- live records {row, node, myList, myIndent}
         local depthCapNote = panel:CreateFontString(nil, "OVERLAY")
         SafeSetFont(depthCapNote, FONT, 9)
         depthCapNote:SetPoint("TOPLEFT", panel, "TOPLEFT", LABEL_X, -structY)
@@ -508,143 +560,218 @@ local function ShowConfigureDialog(parent)
 
         local structScroll = CreateFrame("ScrollFrame", nil, panel, "UIPanelScrollFrameTemplate")
         structScroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 8, -(structY))
-        structScroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -8, -44)
+        structScroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -8, 44)
         local structContainer = CreateFrame("Frame", nil, structScroll)
         structContainer:SetWidth(PANEL_INNER_W - 16)
         structScroll:SetScrollChild(structContainer)
 
-        local function SaveStructure()
-            local list = {}
-            for _, r in ipairs(nodeRows) do list[#list + 1] = r.node end
-            s.structure = list
-            db.settings = s
+        -- s.structure IS the live tree; SaveStructure just persists the settings ref.
+        s.structure = type(s.structure) == "table" and s.structure or {}
+        local function SaveStructure() db.settings = s end
+
+        local function DefaultNode()
+            return { type = "action", macro = "/cast [combat] ", disabled = false }
         end
 
-        local function ReflowRows()
-            for i, r in ipairs(nodeRows) do
-                r.row:SetPoint("TOPLEFT", structContainer, "TOPLEFT", 0, -(i - 1) * 26)
+        local function RemoveFromList(list, node)
+            for i = #list, 1, -1 do
+                if list[i] == node then table.remove(list, i) end
             end
-            structContainer:SetHeight(math.max(30, #nodeRows * 26))
         end
 
-        local function AddStructRow(built)
-            local node = built or { type = "action", macro = "/cast [combat] ", disabled = false }
-            local row = CreateFrame("Frame", nil, structContainer)
-            row:SetPoint("TOPLEFT", structContainer, "TOPLEFT", 0, -(#nodeRows) * 26)
-            row:SetPoint("RIGHT", structContainer, "RIGHT", 0, 0)
-            row:SetHeight(24)
+        local function NormalizeLoopChildren(node)
+            local c = node.children
+            if type(c) ~= "table" then c = {} end
+            node.children = c
+            return c
+        end
 
-            local disCb = CreateStyledFrame("Button", nil, row)
-            disCb:SetSize(14, 14)
-            disCb:SetPoint("LEFT", row, "LEFT", 0, 0)
-            disCb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
-            disCb:SetBackdropColor(node.disabled and 0.9 or 0.4, node.disabled and 0.2 or 0.4, node.disabled and 0.2 or 0.4, 0.9)
-            disCb:SetScript("OnClick", function()
-                node.disabled = not node.disabled
-                disCb:SetBackdropColor(node.disabled and 0.9 or 0.4, node.disabled and 0.2 or 0.4, node.disabled and 0.2 or 0.4, 0.9)
-                SaveStructure()
-            end)
-            disCb:SetScript("OnEnter", function()
-                GameTooltip:SetOwner(row, "ANCHOR_TOPRIGHT"); GameTooltip:AddLine("Enabled (uncheck to disable node)"); GameTooltip:Show()
-            end)
-            disCb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        local function NormalizeIfChildren(node)
+            local c = node.children
+            if type(c) ~= "table" then c = {} end
+            if type(c[1]) ~= "table" then c[1] = {} end
+            if type(c[2]) ~= "table" then c[2] = {} end
+            node.children = c
+            return c
+        end
 
-            local typeDd = CreateFrame("Frame", nil, row, "UIDropDownMenuTemplate")
-            UIDropDownMenu_SetText(typeDd, node.type)
-            UIDropDownMenu_Initialize(typeDd, function()
-                for _, t in ipairs(NODE_TYPES) do
-                    local info = UIDropDownMenu_CreateInfo()
-                    info.text = t
-                    info.func = function()
+        local RebuildRows
+        RebuildRows = function()
+            for _, f in ipairs(rowFrames) do f:Hide() end
+            nodeRows = {}
+            local seen = 0
+
+            local function BuildRowsFromTree(list, indent)
+                for _, node in ipairs(list) do
+                    seen = seen + 1
+                    local myList = list
+                    local row = CreateFrame("Frame", nil, structContainer)
+                    rowFrames[#rowFrames + 1] = row
+                    row:SetPoint("TOPLEFT", structContainer, "TOPLEFT", 0, -(seen - 1) * 26)
+                    row:SetPoint("RIGHT", structContainer, "RIGHT", 0, 0)
+                    row:SetHeight(24)
+
+                    local x0 = indent * 16
+                    local childW = 0
+                    if node.type == "loop" then childW = 28
+                    elseif node.type == "if" then childW = 58 end
+
+                    -- type/state dropdown
+                    local typeDd = MakeStyledDropdown(row, NODE_TYPES, node.type, function(t)
+                        local oldType = node.type
                         node.type = t
                         if t == "action" and not node.macro then node.macro = "/cast [combat] " end
                         if t == "if" and not node.variable then node.variable = "[combat]" end
-                        if t == "loop" and not node["repeat"] then node["repeat"] = 2 end
-                        if t == "pause" and not node.clicks then node.clicks = 1 end
-                        if t == "embed" and not node.sequence then node.sequence = "" end
-                        UIDropDownMenu_SetText(typeDd, t)
-                        CloseDropDownMenus()
+                        if t == "loop" then
+                            if not node["repeat"] then node["repeat"] = 2 end
+                            if oldType == "if" then
+                                local c = NormalizeIfChildren(node)
+                                local flat = {}
+                                for _, b in ipairs(c) do for _, n in ipairs(b) do flat[#flat + 1] = n end end
+                                node.children = flat
+                            end
+                        elseif t == "if" then
+                            if oldType == "loop" then
+                                local c = NormalizeLoopChildren(node)
+                                node.children = { c, {} }
+                            else
+                                NormalizeIfChildren(node)
+                            end
+                        else
+                            if t == "pause" and not node.clicks then node.clicks = 1 end
+                            if t == "embed" and not node.sequence then node.sequence = "" end
+                            if oldType == "loop" or oldType == "if" then node.children = nil end
+                        end
                         SaveStructure()
+                        RebuildRows()
+                    end, 72)
+                    typeDd:SetPoint("LEFT", row, "LEFT", x0 + childW + 14 + 4, 0)
+
+                    -- enabled tick
+                    local disCb = CreateStyledFrame("Button", nil, row)
+                    disCb:SetSize(14, 14)
+                    disCb:SetPoint("LEFT", row, "LEFT", x0 + childW, 0)
+                    disCb:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
+                    disCb:SetBackdropColor(node.disabled and 0.9 or 0.4, node.disabled and 0.2 or 0.4, node.disabled and 0.2 or 0.4, 0.9)
+                    disCb:SetScript("OnClick", function()
+                        node.disabled = not node.disabled
+                        disCb:SetBackdropColor(node.disabled and 0.9 or 0.4, node.disabled and 0.2 or 0.4, node.disabled and 0.2 or 0.4, 0.9)
+                        SaveStructure()
+                    end)
+                    disCb:SetScript("OnEnter", function()
+                        GameTooltip:SetOwner(row, "ANCHOR_TOPRIGHT"); GameTooltip:AddLine("Enabled (uncheck to disable node)"); GameTooltip:Show()
+                    end)
+                    disCb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+                    -- child add buttons (loop/if only)
+                    if node.type == "loop" then
+                        NormalizeLoopChildren(node)
+                        local addChild = CreateStyledButton(row, "+", 22, 18, function()
+                            node.children[#node.children + 1] = DefaultNode()
+                            SaveStructure()
+                            RebuildRows()
+                        end)
+                        rowFrames[#rowFrames + 1] = addChild
+                        addChild:SetPoint("LEFT", row, "LEFT", x0, 0)
+                    elseif node.type == "if" then
+                        NormalizeIfChildren(node)
+                        local addT = CreateStyledButton(row, "+T", 26, 18, function()
+                            node.children[1][#node.children[1] + 1] = DefaultNode()
+                            SaveStructure()
+                            RebuildRows()
+                        end)
+                        rowFrames[#rowFrames + 1] = addT
+                        addT:SetPoint("LEFT", row, "LEFT", x0, 0)
+                        local addF = CreateStyledButton(row, "+F", 26, 18, function()
+                            node.children[2][#node.children[2] + 1] = DefaultNode()
+                            SaveStructure()
+                            RebuildRows()
+                        end)
+                        rowFrames[#rowFrames + 1] = addF
+                        addF:SetPoint("LEFT", row, "LEFT", x0 + 28, 0)
                     end
-                    UIDropDownMenu_AddButton(info)
+
+                    -- main text field (per-type)
+                    local field = CreateFrame("EditBox", nil, row, "BackdropTemplate")
+                    rowFrames[#rowFrames + 1] = field
+                    field:SetFontObject(ChatFontNormal)
+                    field:SetTextColor(1, 1, 1, 1)
+                    field:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
+                    field:SetBackdropColor(0.04, 0.04, 0.06, 0.8)
+                    field:SetAutoFocus(false)
+                    local vtext = node.macro or node.variable or tostring(node["repeat"] or node.clicks or node.sequence or "")
+                    field:SetText(tostring(vtext or ""))
+                    field:SetHeight(20)
+                    local fieldX = x0 + childW + 14 + 4 + 72 + 6
+                    local fieldW = math.max(80, 338 - x0 - childW)
+                    field:SetWidth(fieldW)
+                    field:SetPoint("LEFT", row, "LEFT", fieldX, 0)
+                    field:SetScript("OnTextChanged", function(eb)
+                        local tx = eb:GetText() or ""
+                        if node.type == "action" then node.macro = tx
+                        elseif node.type == "if" then node.variable = tx
+                        elseif node.type == "loop" then node["repeat"] = math.max(1, math.min(50, tonumber(tx) or 1))
+                        elseif node.type == "pause" then node.clicks = math.max(1, tonumber(tx) or 1)
+                        else node.sequence = tx end
+                        SaveStructure()
+                    end)
+
+                    -- interval (actions only; greyed otherwise)
+                    local ivLabel = row:CreateFontString(nil, "OVERLAY")
+                    SafeSetFont(ivLabel, FONT, 10)
+                    ivLabel:SetText("iv")
+                    ivLabel:SetPoint("LEFT", field, "RIGHT", 4, 0)
+                    ivLabel:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3], C.textMuted[4])
+                    local iv = CreateFrame("EditBox", nil, row, "BackdropTemplate")
+                    rowFrames[#rowFrames + 1] = iv
+                    iv:SetSize(34, 20)
+                    iv:SetFontObject(ChatFontNormal)
+                    iv:SetTextColor(1, 1, 1, 1)
+                    iv:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
+                    iv:SetBackdropColor(0.04, 0.04, 0.06, 0.8)
+                    iv:SetAutoFocus(false)
+                    iv:SetText(node.interval and tostring(node.interval) or "")
+                    iv:SetScript("OnTextChanged", function(eb)
+                        local v = tonumber(eb:GetText() or "")
+                        if v then node.interval = math.max(1, math.min(50, v)) else node.interval = nil end
+                        SaveStructure()
+                    end)
+                    iv:SetPoint("LEFT", ivLabel, "RIGHT", 2, 0)
+                    ivLabel:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3], C.textMuted[4])
+                    iv:SetTextColor(1, 1, 1, 1)
+                    iv:SetEnabled(node.type == "action")
+                    ivLabel:SetText(node.type == "action" and "iv" or "iv*")
+
+                    -- delete (closure bug #3: myList captured before use)
+                    local delBtn = CreateStyledButton(row, "x", 18, 18, function()
+                        RemoveFromList(myList, node)
+                        SaveStructure()
+                        RebuildRows()
+                    end)
+                    rowFrames[#rowFrames + 1] = delBtn
+                    delBtn:SetPoint("RIGHT", row, "RIGHT", -2, 0)
+
+                    -- recurse into children
+                    if node.type == "loop" then
+                        BuildRowsFromTree(NormalizeLoopChildren(node), indent + 1)
+                    elseif node.type == "if" then
+                        local c = NormalizeIfChildren(node)
+                        BuildRowsFromTree(c[1], indent + 1)
+                        BuildRowsFromTree(c[2], indent + 1)
+                    end
                 end
-            end)
-            UIDropDownMenu_SetWidth(typeDd, 72, 0)
-            typeDd:SetPoint("LEFT", disCb, "RIGHT", 4, 0)
-
-            local field = CreateFrame("EditBox", nil, row, "BackdropTemplate")
-            field:SetSize(300, 20)
-            field:SetFontObject(ChatFontNormal)
-            field:SetTextColor(1, 1, 1, 1)
-            field:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
-            field:SetBackdropColor(0.04, 0.04, 0.06, 0.8)
-            field:SetAutoFocus(false)
-            local vtext = node.macro or node.variable or tostring(node["repeat"] or node.clicks or node.sequence or "")
-            field:SetText(tostring(vtext or ""))
-            field:SetScript("OnTextChanged", function(eb)
-                local tx = eb:GetText() or ""
-                if node.type == "action" then node.macro = tx
-                elseif node.type == "if" then node.variable = tx
-                elseif node.type == "loop" then node["repeat"] = math.max(1, math.min(50, tonumber(tx) or 1))
-                elseif node.type == "pause" then node.clicks = math.max(1, tonumber(tx) or 1)
-                else node.sequence = tx end
-                SaveStructure()
-            end)
-            field:SetPoint("LEFT", typeDd, "RIGHT", 6, 0)
-
-            local ivLabel = row:CreateFontString(nil, "OVERLAY")
-            SafeSetFont(ivLabel, FONT, 10)
-            ivLabel:SetText("iv")
-            ivLabel:SetPoint("LEFT", field, "RIGHT", 4, 0)
-            ivLabel:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3], C.textMuted[4])
-            local iv = CreateFrame("EditBox", nil, row, "BackdropTemplate")
-            iv:SetSize(34, 20)
-            iv:SetFontObject(ChatFontNormal)
-            iv:SetTextColor(1, 1, 1, 1)
-            iv:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
-            iv:SetBackdropColor(0.04, 0.04, 0.06, 0.8)
-            iv:SetAutoFocus(false)
-            iv:SetText(node.interval and tostring(node.interval) or "")
-            iv:SetScript("OnTextChanged", function(eb)
-                local v = tonumber(eb:GetText() or "")
-                if v then node.interval = math.max(1, math.min(50, v)) else node.interval = nil end
-                SaveStructure()
-            end)
-            iv:SetPoint("LEFT", ivLabel, "RIGHT", 2, 0)
-
-            -- Interval is ignored inside if branches (compiler): grey it out
-            local function UpdateIvState()
-                local usable = node.type == "action"
-                ivLabel:SetTextColor(usable and C.textMuted[1] or 0.3, usable and C.textMuted[2] or 0.3, usable and C.textMuted[3] or 0.3, 0.5)
-                iv:SetTextColor(usable and 1 or 0.5, usable and 1 or 0.5, usable and 1 or 0.5, 0.5)
-                iv:SetEnabled(usable)
-                ivLabel:SetText(usable and "iv" or "iv*")
             end
-            UpdateIvState()
 
-            local delBtn = CreateStyledButton(row, "x", 18, 18, function()
-                row:Hide()
-                local rows = {}
-                for i, r2 in ipairs(nodeRows) do
-                    if r2 ~= r then rows[#rows + 1] = r2 end
-                end
-                nodeRows = rows
-                ReflowRows()
-                SaveStructure()
-            end)
-            delBtn:SetPoint("RIGHT", row, "RIGHT", -2, 0)
-
-            local r = { row = row, node = node }
-            nodeRows[#nodeRows + 1] = r
-            ReflowRows()
+            BuildRowsFromTree(s.structure, 0)
+            structContainer:SetHeight(math.max(30, seen * 26))
         end
 
-        for _, n in ipairs(type(s.structure) == "table" and s.structure or {}) do
-            AddStructRow(n)
-        end
+        RebuildRows()
 
         local addNode = CreateStyledButton(panel, "+ Add Node", 160, 24, function()
-            AddStructRow()
+            s.structure[#s.structure + 1] = DefaultNode()
+            SaveStructure()
+            RebuildRows()
         end)
         addNode:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 8, 6)
 
@@ -755,21 +882,9 @@ local function ShowConfigureDialog(parent)
             lbl:SetPoint("LEFT", row, "LEFT", 0, 0)
             lbl:SetText(name)
             lbl:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
-            local stateDd = CreateFrame("Frame", nil, row, "UIDropDownMenuTemplate")
-            UIDropDownMenu_SetWidth(stateDd, 80, 0)
-            UIDropDownMenu_SetText(stateDd, StateOf(name))
-            UIDropDownMenu_Initialize(stateDd, function()
-                for _, st in ipairs({"Auto", "Always", "Never"}) do
-                    local info = UIDropDownMenu_CreateInfo()
-                    info.text = st
-                    info.func = function()
-                        SetState(name, st)
-                        UIDropDownMenu_SetText(stateDd, st)
-                        CloseDropDownMenus()
-                    end
-                    UIDropDownMenu_AddButton(info)
-                end
-            end)
+            local stateDd = MakeStyledDropdown(row, {"Auto", "Always", "Never"}, StateOf(name), function(st)
+                SetState(name, st)
+            end, 80)
             stateDd:SetPoint("RIGHT", row, "RIGHT", -2, 0)
         end
 
@@ -777,84 +892,6 @@ local function ShowConfigureDialog(parent)
 
         panel:SetHeight(360)
         tabHeights[3] = 360
-    end
-
-    -- Tab 4: Live (read-back of the pushed sequence from the EMS plugin)
-    do
-        local panel = panels[4]
-        local liveY = 8
-        local tip = panel:CreateFontString(nil, "OVERLAY")
-        SafeSetFont(tip, FONT, 9)
-        tip:SetPoint("TOPLEFT", panel, "TOPLEFT", LABEL_X, -liveY)
-        tip:SetText("Read-back of the sequence pushed to GRIP-EMS (authored vs execution order)")
-        tip:SetTextColor(C.text[1], C.text[2], C.text[3], 0.5)
-        liveY = liveY + ROW_H
-
-        local authScroll = CreateFrame("ScrollFrame", nil, panel, "UIPanelScrollFrameTemplate")
-        authScroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 8, -liveY)
-        authScroll:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 8, -40)
-        authScroll:SetPoint("RIGHT", panel, "CENTER", -4, 0)
-        local authContainer = CreateFrame("Frame", nil, authScroll)
-        authContainer:SetWidth(PANEL_INNER_W / 2 - 16)
-        authScroll:SetScrollChild(authContainer)
-
-        local execScroll = CreateFrame("ScrollFrame", nil, panel, "UIPanelScrollFrameTemplate")
-        execScroll:SetPoint("TOPLEFT", panel, "CENTER", 4, -liveY)
-        execScroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -8, -40)
-        local execContainer = CreateFrame("Frame", nil, execScroll)
-        execContainer:SetWidth(PANEL_INNER_W / 2 - 16)
-        execScroll:SetScrollChild(execContainer)
-
-        local statusText = panel:CreateFontString(nil, "OVERLAY")
-        SafeSetFont(statusText, FONT, 10)
-        statusText:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 8, 6)
-
-        local function FillList(container, steps, label)
-            for _, child in ipairs({ container:GetChildren() }) do child:Hide() end
-            local shown = 0
-            local head = container:CreateFontString(nil, "OVERLAY")
-            SafeSetFont(head, FONT, 11)
-            head:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
-            head:SetText(label)
-            head:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], 0.9)
-            shown = shown + 1
-            for _, s in ipairs(steps or {}) do
-                if shown > 40 then break end
-                local line = container:CreateFontString(nil, "OVERLAY")
-                SafeSetFont(line, FONT, 10)
-                line:SetPoint("TOPLEFT", container, "TOPLEFT", 4, -((shown - 1) * 17))
-                line:SetText(string.format("%d. %s (%d)", s.index or shown - 1, s.spellName or "?", s.spellID or 0))
-                line:SetTextColor(C.text[1], C.text[2], C.text[3], C.text[4])
-                shown = shown + 1
-            end
-            container:SetHeight(math.max(30, shown * 17))
-        end
-
-        local function RefreshLive()
-            local api = GRIPEMS and GRIPEMS.API
-            local name = Addon.emsLastPushedName
-            if not api or not name then
-                statusText:SetText("|cff8888ccNo pushed DummyAnalyzer sequence found — push one from the export dialog.|r")
-                return
-            end
-            local ok1, a1 = pcall(function()
-                if type(api.GetAuthoredSteps) == "function" then return api:GetAuthoredSteps(name) end
-            end)
-            local ok2, a2 = pcall(function()
-                if type(api.GetSequenceSteps) == "function" then return api:GetSequenceSteps(name) end
-            end)
-            local authored = ok1 and type(a1) == "table" and a1 or {}
-            local executed = ok2 and type(a2) == "table" and a2 or {}
-            FillList(authContainer, authored, "Authored (unrolled/flattened)")
-            FillList(execContainer, executed, "Execution (post step-function)")
-            statusText:SetText(string.format("|cff33ff33%s|r — %d authored / %d execution", tostring(name), #authored, #executed))
-        end
-
-        local refreshBtn = CreateStyledButton(panel, "Refresh", 100, 24, RefreshLive)
-        refreshBtn:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 8, 30)
-
-        panel:SetHeight(360)
-        tabHeights[4] = 360
     end
 
     -- Resize dialog from tallest tab
@@ -1453,8 +1490,101 @@ local pushBtn = CreateStyledButton(bottomRow, "Push to GRIP-EMS", 170, 32, funct
     end
     if Addon.debugMode then print("|cffffff00[DummyAnalyzer EMS]|r pushBtn created and anchored: " .. tostring(pushBtn:GetName() or "<anon>")) end
 
-    local cfgBtn = CreateStyledButton(bottomRow, "Configure", 100, 32, function() ShowConfigureDialog(exportDialog) end)
+    local cfgBtn = CreateStyledButton(bottomRow, "Configure", 90, 32, function() ShowConfigureDialog(exportDialog) end)
     cfgBtn:SetPoint("LEFT", pushBtn, "RIGHT", 10, 0)
+
+    -- Read-back: pop up a small dialog showing the authored vs execution order of the
+    -- sequence last pushed to GRIP-EMS (port of the removed Configure "Live" tab).
+    local readBtn = CreateStyledButton(bottomRow, "Read-back", 90, 32, function()
+        local rb = CreateStyledFrame("Frame", nil, UIParent)
+        trackDialog(rb)
+        rb:SetSize(600, 400)
+        rb:SetPoint("CENTER")
+        ApplyBackdrop(rb, false)
+        local rbTitle = CreateStyledFrame("Frame", nil, rb)
+        rbTitle:SetPoint("TOPLEFT", rb, "TOPLEFT")
+        rbTitle:SetPoint("TOPRIGHT", rb, "TOPRIGHT")
+        rbTitle:SetHeight(30)
+        rbTitle:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
+        rbTitle:SetBackdropColor(C.title[1], C.title[2], C.title[3], C.title[4])
+        local rbTitleText = rbTitle:CreateFontString(nil, "OVERLAY")
+        SafeSetFont(rbTitleText, BOLD_FONT, 14)
+        rbTitleText:SetText("EMS Read-back")
+        rbTitleText:SetPoint("CENTER")
+        rbTitleText:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
+        local rbClose = CreateStyledButton(rbTitle, "X", 24, 24, function() rb:Hide() end)
+        rbClose:SetPoint("RIGHT", rbTitle, "RIGHT", -6, 0)
+
+        local authScroll = CreateFrame("ScrollFrame", nil, rb, "UIPanelScrollFrameTemplate")
+        authScroll:SetPoint("TOPLEFT", rb, "TOPLEFT", 8, -40)
+        authScroll:SetPoint("BOTTOMLEFT", rb, "BOTTOMLEFT", 8, -60)
+        authScroll:SetPoint("RIGHT", rb, "CENTER", -4, 0)
+        local authContainer = CreateFrame("Frame", nil, authScroll)
+        authContainer:SetWidth(286)
+        authScroll:SetScrollChild(authContainer)
+
+        local execScroll = CreateFrame("ScrollFrame", nil, rb, "UIPanelScrollFrameTemplate")
+        execScroll:SetPoint("TOPLEFT", rb, "CENTER", 4, -40)
+        execScroll:SetPoint("BOTTOMRIGHT", rb, "BOTTOMRIGHT", -8, -60)
+        local execContainer = CreateFrame("Frame", nil, execScroll)
+        execContainer:SetWidth(286)
+        execScroll:SetScrollChild(execContainer)
+
+        local rbStatus = rb:CreateFontString(nil, "OVERLAY")
+        SafeSetFont(rbStatus, FONT, 10)
+        rbStatus:SetPoint("BOTTOMLEFT", rb, "BOTTOMLEFT", 8, 6)
+
+        local list = {}
+        -- item = {index, spellName, spellID}
+        local function FillList(container, steps, label)
+            for _, region in ipairs({ container:GetRegions() }) do
+                if region.IsShown and region:GetObjectType() == "FontString" then region:Hide() end
+            end
+            local shown = 0
+            local head = container:CreateFontString(nil, "OVERLAY")
+            SafeSetFont(head, FONT, 11)
+            head:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+            head:SetText(label)
+            head:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], 0.9)
+            shown = shown + 1
+            for _, s in ipairs(steps or {}) do
+                if shown > 40 then break end
+                local line = container:CreateFontString(nil, "OVERLAY")
+                SafeSetFont(line, FONT, 10)
+                line:SetPoint("TOPLEFT", container, "TOPLEFT", 4, -((shown - 1) * 17))
+                line:SetText(string.format("%d. %s (%d)", s.index or shown - 1, s.spellName or "?", s.spellID or 0))
+                line:SetTextColor(C.text[1], C.text[2], C.text[3], C.text[4])
+                shown = shown + 1
+            end
+            container:SetHeight(math.max(30, shown * 17))
+        end
+
+        local function RefreshReadback()
+            local api = GRIPEMS and GRIPEMS.API
+            local name = Addon.emsLastPushedName
+            if not api or not name then
+                rbStatus:SetText("|cff8888ccNo pushed DummyAnalyzer sequence found - push one from this dialog.|r")
+                return
+            end
+            local ok1, a1 = pcall(function()
+                if type(api.GetAuthoredSteps) == "function" then return api:GetAuthoredSteps(name) end
+            end)
+            local ok2, a2 = pcall(function()
+                if type(api.GetSequenceSteps) == "function" then return api:GetSequenceSteps(name) end
+            end)
+            local authored = ok1 and type(a1) == "table" and a1 or {}
+            local executed = ok2 and type(a2) == "table" and a2 or {}
+            FillList(authContainer, authored, "Authored (unrolled/flattened)")
+            FillList(execContainer, executed, "Execution (post step-function)")
+            rbStatus:SetText(string.format("|cff33ff33%s|r - %d authored / %d execution", tostring(name), #authored, #executed))
+        end
+
+        local rbRefresh = CreateStyledButton(rb, "Refresh", 100, 24, RefreshReadback)
+        rbRefresh:SetPoint("BOTTOMLEFT", rb, "BOTTOMLEFT", 8, 30)
+        rb:Show()
+        RefreshReadback()
+    end)
+    readBtn:SetPoint("LEFT", cfgBtn, "RIGHT", 10, 0)
 
     local closeBtn2 = CreateStyledButton(bottomRow, "Close", 100, 32, function() exportDialog:Hide() end, "danger")
     closeBtn2:SetPoint("RIGHT", bottomRow, "RIGHT", 0, 0)
