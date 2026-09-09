@@ -160,11 +160,7 @@ Addon.BuildSequence = function(orderedSpellNames, cfg, intervalOverrides)
     end
     local intervalMap = BuildIntervalMap(spells, cfg, intervalOverrides)
     local actions = BuildActionsFromFlat(spells, intervalMap)
-    if cfg.structure and type(cfg.structure) == "table" and #cfg.structure > 0 then
-        for _, act in ipairs(BuildActionsFromStructure(cfg.structure)) do
-            actions[#actions + 1] = act
-        end
-    end
+    -- Structure-tab overlay removed per user request; flat spells only.
 
     local classID = select(3, UnitClass("player"))
     local spec = GetSpecialization()

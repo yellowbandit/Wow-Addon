@@ -23,6 +23,13 @@ local function Ems_BuildSequenceData(seqName, orderedSteps)
     local cfg = (GetCharDB()).settings or {}
     local sequence, intervalMap = Addon.BuildSequence(orderedSteps, cfg)
     if not sequence then return nil, "no spells" end
+    local valid, errs, warns = Addon.ValidateSequenceActions(sequence.versions and sequence.versions[1] and sequence.versions[1].actions)
+    if errs and #errs > 0 then
+        DebugLog("EMS ValidateActions errors: " .. table.concat(errs, "; "))
+    end
+    if warns and #warns > 0 then
+        DebugLog("EMS ValidateActions warnings: " .. table.concat(warns, "; "))
+    end
     local now = time()
     local actionCount = #(sequence.versions[1].actions or {})
     sequence.name = seqName
