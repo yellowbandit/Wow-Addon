@@ -308,7 +308,7 @@ local function ShowConfigureDialog(parent)
     titleBar:SetBackdropColor(C.title[1], C.title[2], C.title[3], C.title[4])
     local titleText = titleBar:CreateFontString(nil, "OVERLAY")
     SafeSetFont(titleText, BOLD_FONT, 14)
-    titleText:SetText("Configure")
+    titleText:SetText("Settings")
     titleText:SetPoint("CENTER")
     titleText:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
 
@@ -338,7 +338,7 @@ local function ShowConfigureDialog(parent)
         if lastTab then lastTab:SetBackdropColor(C.selected[1], C.selected[2], C.selected[3], C.selected[4]) end
     end
 
-    local tabNames = {"Playback", "Spells"}
+    local tabNames = {"Options", "Spells"}
     for ti, tname in ipairs(tabNames) do
         local btn = CreateStyledFrame("Button", nil, tabRow)
         btn:SetPoint("LEFT", tabRow, "LEFT", (ti - 1) * 130, 0)
@@ -438,61 +438,54 @@ local function ShowConfigureDialog(parent)
             currentY = currentY + ROW_H
         end
 
-        -- Solver knobs grouped separately from literal EMS sequence fields.
-        PlaceHeader("Copy expansion (solver):")
+        -- Every control here takes effect on the next suggested sequence and the
+        -- sequence pushed to GRIP-EMS. Labels reworded to be self-explanatory.
+        local tip = panel:CreateFontString(nil, "OVERLAY")
+        SafeSetFont(tip, FONT, 9)
+        tip:SetPoint("TOPLEFT", panel, "TOPLEFT", LABEL_X, -currentY)
+        tip:SetText("Applies to the next sequence you generate. Click Save Preferences to keep changes.")
+        tip:SetTextColor(C.text[1], C.text[2], C.text[3], 0.5)
+        currentY = currentY + ROW_H
 
-        -- Row 1
-        PlaceLabel("Max consecutive repeats (0=unlimited):")
+        PlaceHeader("Step layout:")
+        PlaceLabel("Max times a spell repeats in a row (0 = unlimited):")
         PlaceEdit(s.maxRepeats or 3, function(eb)
             local v = tonumber(eb:GetText()); if v and v >= 0 then s.maxRepeats = v else s.maxRepeats = 0 end
         end)
         currentY = currentY + ROW_H
 
-        -- Row 2: Auto-interleave — top N spells by cast-count; interval computed in BuildSequence
-        PlaceLabel("Auto-interleave: top N spells (0=off):")
+        PlaceLabel("Spread out your top N most-used spells (0 = off):")
         PlaceEdit(s.interleave or 0, function(eb)
             local v = tonumber(eb:GetText()); if v and v >= 0 then s.interleave = v else s.interleave = 0 end
         end)
         currentY = currentY + ROW_H
 
-        -- Row 3
-        PlaceLabel("Min copies per spell:")
+        PlaceLabel("Minimum copies of every spell in the list:")
         PlaceEdit(s.minCopies or 1, function(eb)
             local v = tonumber(eb:GetText()); if v and v >= 0 then s.minCopies = v else s.minCopies = 1 end
         end)
         currentY = currentY + ROW_H
 
-        PlaceHeader("EMS sequence fields:")
-
-        -- Row 4
-        PlaceLabel("Step Function:")
-        PlaceDropdown({"Priority", "Sequential", "ReversePriority", "Random"}, s.stepFunction or "Priority", function(opt)
-            s.stepFunction = opt
-        end)
-        currentY = currentY + ROW_H
-
-        -- Row 5: checkbox + hint text
-        PlaceLabel("Auto-push to GRIP-EMS:")
+        PlaceHeader("Push to GRIP-EMS:")
+        PlaceLabel("Auto-push new sequences to GRIP-EMS:")
         local apCb = PlaceCheckbox(s.autoPush or false, function(val) s.autoPush = val end)
         local apHint = panel:CreateFontString(nil, "OVERLAY")
         SafeSetFont(apHint, FONT, 9)
         apHint:SetPoint("LEFT", apCb, "RIGHT", 6, 0)
-        apHint:SetText("Auto-push when Best Sequence is generated")
+        apHint:SetText("Pushes when a best sequence is generated")
         apHint:SetTextColor(C.text[1], C.text[2], C.text[3], 0.5)
         currentY = currentY + ROW_H
 
-        -- Row 6
-        PlaceLabel("KeyPress macro:")
+        PlaceHeader("Pushed sequence details (advanced):")
+        PlaceLabel("Macro to run at sequence start:")
         PlaceEdit(s.keyPress or "/startattack", function(eb) s.keyPress = eb:GetText() end)
         currentY = currentY + ROW_H
 
-        -- Row 7
-        PlaceLabel("KeyRelease macro:")
+        PlaceLabel("Macro to run at sequence stop (optional):")
         PlaceEdit(s.keyRelease or "", function(eb) s.keyRelease = eb:GetText() end)
         currentY = currentY + ROW_H
 
-        -- Row 8: Reset On — 2x2 grid so checkbox + label never clips
-        PlaceLabel("Reset on:")
+        PlaceLabel("Restart the sequence when:")
         local resetDefs = {
             {key = "resetOnCombat", label = "Combat", default = true},
             {key = "resetOnTarget", label = "Target", default = true},
@@ -516,22 +509,25 @@ local function ShowConfigureDialog(parent)
             currentY = currentY + ROW_H
         end
 
-        -- Row 9
-        PlaceLabel("Reset timer (sec, 0=off):")
+        PlaceLabel("Restart after idle for N seconds (0 = off):")
         PlaceEdit(s.resetTimer or 0, function(eb)
             local v = tonumber(eb:GetText()); if v and v >= 0 then s.resetTimer = v else s.resetTimer = 0 end
         end)
         currentY = currentY + ROW_H
 
-        -- Row 10
-        PlaceLabel("Repeat whole list N times (0=no wrap):")
+        PlaceLabel("Keep looping the list N times (0 = single pass):")
         PlaceEdit(s.repeatCount or 0, function(eb)
             local v = tonumber(eb:GetText()); if v and v >= 0 then s.repeatCount = v else s.repeatCount = 0 end
         end)
         currentY = currentY + ROW_H
 
-        -- Row 11
-        PlaceLabel("Privacy Mode:")
+        PlaceLabel("Step order GRIP-EMS uses:")
+        PlaceDropdown({"Priority", "Sequential", "ReversePriority", "Random"}, s.stepFunction or "Priority", function(opt)
+            s.stepFunction = opt
+        end)
+        currentY = currentY + ROW_H
+
+        PlaceLabel("Who can see the pushed sequence:")
         PlaceDropdown({"private", "public", "pseudonymous"}, s.privacyMode or "private", function(opt)
             s.privacyMode = opt
         end)

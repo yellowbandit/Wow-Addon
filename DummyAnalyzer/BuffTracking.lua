@@ -238,27 +238,36 @@ end
 -- positive health deltas on "target"; a spike upward (dummy reset/re-target)
 -- only re-baselines without counting. Health may be a secret value in some
 -- contexts, so every read is pcall-guarded and skipped if we can't read it.
-local function TrackTargetHealth()
-    if not Addon.testActive then return end
+local function TrySeedHealthBaseline()
+    if Addon.healthBaseHp then return end
     local okMax, mhp = pcall(UnitHealthMax, "target")
-    if not okMax or type(mhp) ~= "number" or IsSecretValue(mhp) then
-        Addon.healthTrackReady = false
-        return
-    end
-    if mhp <= 0 then return end
+    if not okMax or type(mhp) ~= "number" or IsSecretValue(mhp) or mhp <= 0 then return end
     local okCur, hp = pcall(UnitHealth, "target")
-    if not okCur or type(hp) ~= "number" or IsSecretValue(hp) then
-        Addon.healthTrackReady = false
-        return
-    end
+    if not okCur or type(hp) ~= "number" or IsSecretValue(hp) then return end
     if hp < 0 then hp = 0 end
     if hp > mhp then hp = mhp end
+    Addon.healthBaseHp = hp
+    Addon.healthTotal = 0
+    Addon.healthTrackReady = true
+end
+
+local function TrackTargetHealth()
+    if not Addon.testActive then return end
     if not Addon.healthBaseHp then
-        Addon.healthBaseHp = hp
-        Addon.healthTotal = 0
-        Addon.healthTrackReady = true
+        TrySeedHealthBaseline()
         return
     end
+    local okMax, mhp = pcall(UnitHealthMax, "target")
+    if not okMax or type(mhp) ~= "number" or IsSecretValue(mhp) or mhp <= 0 then return end
+    if Addon.healthBaseHp > mhp then
+        -- Target swapped to a weaker unit — re-baseline without counting it.
+        Addon.healthBaseHp = mhp
+        return
+    end
+    local okCur, hp = pcall(UnitHealth, "target")
+    if not okCur or type(hp) ~= "number" or IsSecretValue(hp) then return end
+    if hp < 0 then hp = 0 end
+    if hp > mhp then hp = mhp end
     local delta = Addon.healthBaseHp - hp
     if delta > 0 then
         Addon.healthTotal = Addon.healthTotal + delta
@@ -268,10 +277,10 @@ local function TrackTargetHealth()
 end
 
 local function PollTestMetrics()
-    CaptureCombatSnapshot(false)
-    TrackTargetHealth()
-    PollPlayerBuffs()
-    PollTargetDebuffs()
+    pcall(CaptureCombatSnapshot, false)
+    pcall(TrackTargetHealth)
+    pcall(PollPlayerBuffs)
+    pcall(PollTargetDebuffs)
 end
 
 local function StartBuffTicker()
@@ -313,3 +322,4 @@ Addon.ResetBuffTracking = ResetBuffTracking
 Addon.StartBuffTicker = StartBuffTicker
 Addon.FinalizeBuffTracking = FinalizeBuffTracking
 Addon.ResetHealthFallback = ResetHealthFallback
+Addon.TrySeedHealthBaseline = TrySeedHealthBaseline

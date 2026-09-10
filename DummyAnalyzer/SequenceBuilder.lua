@@ -43,7 +43,8 @@ local function BuildIntervalMap(orderedSpellNames, cfg, intervalOverrides)
         return intervalMap
     end
     local freq = ComputeFreq(orderedSpellNames)
-    local minInterleave = NumberOrZero(cfg.interleave)
+    local rawInterleave = cfg.interleave
+    local minInterleave = NumberOrZero(rawInterleave)
     if minInterleave > 0 then
         local sorted = {}
         for name, cnt in pairs(freq) do
@@ -53,7 +54,8 @@ local function BuildIntervalMap(orderedSpellNames, cfg, intervalOverrides)
         for i = 1, math.min(minInterleave, #sorted) do
             intervalMap[sorted[i].name] = ComputeIntervalFromFreq(orderedSpellNames, freq, sorted[i].count)
         end
-    else
+    elseif rawInterleave == nil then
+        -- Legacy data without an interleave setting: keep the old auto-spacing.
         local maxFreq = 0
         for _, cnt in pairs(freq) do
             if cnt > maxFreq then maxFreq = cnt end

@@ -1261,10 +1261,28 @@ end
 -- ============================================
 -- INITIALISATION (original)
 -- ============================================
+local function GetMinimapIcon()
+    -- Probe candidate training-dummy textures. GetFileIDFromPath returns 0
+    -- (or nil) for paths the client cannot resolve, so we use whichever dummy
+    -- icon actually exists in the 12.x client instead of guessing.
+    local candidates = {
+        "Interface\\Icons\\INV_Misc_TargetDummy_01",     -- Engineering Target Dummy (item 4366)
+        "Interface\\Icons\\INV_Engineering_TargetDummy", -- later-expansion training dummy
+    }
+    for _, path in ipairs(candidates) do
+        local ok, fileID = pcall(GetFileIDFromPath, path)
+        if ok and fileID and tonumber(fileID) and tonumber(fileID) ~= 0 then
+            return path
+        end
+    end
+    -- Last resort: core-UI skull raid-target icon (always present, still a "target").
+    return "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8"
+end
+
 local minimapBtn = CreateFrame("Button", "DummyAnalyzerMinimapBtn", Minimap)
 minimapBtn:SetSize(24, 24)
 minimapBtn:SetPoint("TOPRIGHT", Minimap, "TOPRIGHT", -4, -4)
-minimapBtn:SetNormalTexture("Interface\\Icons\\INV_Misc_TargetDummy_01")
+minimapBtn:SetNormalTexture(GetMinimapIcon())
 minimapBtn:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
 minimapBtn:SetScript("OnClick", function()
     local frame = CreateMainFrame()

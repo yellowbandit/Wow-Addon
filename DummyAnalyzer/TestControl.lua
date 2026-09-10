@@ -12,6 +12,7 @@ local ReadDamageMeterData = Addon.ReadDamageMeterData
 local ResetMeterCapture = Addon.ResetMeterCapture
 local CaptureCombatSnapshot = Addon.CaptureCombatSnapshot
 local ResetHealthFallback = Addon.ResetHealthFallback
+local TrySeedHealthBaseline = Addon.TrySeedHealthBaseline
 local ResetBuffTracking = Addon.ResetBuffTracking
 local StartBuffTicker = Addon.StartBuffTicker
 local FinalizeBuffTracking = Addon.FinalizeBuffTracking
@@ -25,7 +26,7 @@ local function FinalizeReport()
     Addon.pendingReport = false
     ResetDamageData()
     ReadDamageMeterData()
-    if Addon.totalDamage == 0 and Addon.healthTrackReady and Addon.healthTotal > 0 then
+    if Addon.totalDamage == 0 and Addon.healthTotal > 0 then
         Addon.totalDamage = Addon.healthTotal
         Addon.damageFromHealthFallback = true
         if Addon.debugMode then
@@ -116,6 +117,7 @@ local function BeginActiveTest(minutes)
     Addon.spellHistory = {}
     ResetDamageData()
     ResetHealthFallback()
+    TrySeedHealthBaseline()
     ResetBuffTracking()
     Addon.testActive = true
     Addon.startTime = GetTime()
@@ -164,6 +166,7 @@ local function StartTest(minutes)
     Addon.timerText:SetText("Waiting for combat")
 
     Addon.combatWaitTicker = C_Timer.NewTicker(0.2, function(ticker)
+        pcall(TrySeedHealthBaseline)
         if not Addon.armedTest then
             ticker:Cancel()
             Addon.combatWaitTicker = nil

@@ -553,6 +553,15 @@ local function GenerateReportText()
             end
             table.insert(lines, "")
         end
+        if Addon.healthTotal <= 0 then
+            table.insert(lines, "--- Health Fallback ---")
+            table.insert(lines, string.format("healthBaseHp=%s  healthTotal=%s  track=%s",
+                tostring(Addon.healthBaseHp), tostring(Addon.healthTotal), tostring(Addon.healthTrackReady)))
+            table.insert(lines, "Tip: keep the training dummy targeted for the whole test. Damage is read")
+            table.insert(lines, "from its health bar, which is not available inside an instance or when the")
+            table.insert(lines, "client hides HP from addons.")
+            table.insert(lines, "")
+        end
     end
 
     if totalCasts > 0 and elapsed > 0 then
