@@ -20,6 +20,13 @@ local emsLoadoutDirty = false
 local function Ems_BuildSequenceData(seqName, orderedSteps)
     -- orderedSteps: array of spell names (built by ParseSequenceLines at the Best/Next button click)
     -- Single EMS builder (SequenceBuilder.lua) owns every sequence field; this only stamps meta.
+    local clean = {}
+    if type(orderedSteps) == "table" then
+        for _, s in ipairs(orderedSteps) do
+            if type(s) == "string" and s ~= "" then clean[#clean + 1] = s end
+        end
+    end
+    orderedSteps = clean
     local cfg = (GetCharDB()).settings or {}
     local sequence, intervalMap = Addon.BuildSequence(orderedSteps, cfg)
     if not sequence then return nil, "no spells" end

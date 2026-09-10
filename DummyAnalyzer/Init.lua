@@ -283,133 +283,74 @@ end
 -- mode = "best" or "next"
 local function BuildKidFriendlyDisplay(mode, logContext, score, duration, macros, ordered, deficitInfo, hasBaseline)
     -- logContext: { name="...", id=..., logsCount=N, logLabelById={id=label,...} } or nil
+    -- SHORT-FOCUSED output: only the macro order + a one-line score context. No deficit walls,
+    -- no step numbers, no logs-used list. What you see here is exactly what gets pushed.
     local lines = {}
+    local spellLines = {}
+    if type(macros) == "table" then
+        for _, m in ipairs(macros) do
+            local spell = type(m) == "string" and m:match("/%a+ %[combat%] (.+)")
+            table.insert(spellLines, tostring(spell or m or ""))
+        end
+    end
     if mode == "best" then
         lines[#lines + 1] = "|cff66ff66=== THE BEST SEQUENCE ===|r"
         lines[#lines + 1] = ""
-        lines[#lines + 1] = "What this means: I looked at ALL of your training logs combined and"
+        if score and score > 0 then
+            lines[#lines + 1] = ("|cffffd200Score:|r %s"):format(Addon.FormatNumber(score))
+        end
         if logContext and type(logContext.logsCount) == "number" then
-            lines[#lines + 1] = ("figured out a good order to press your buttons. Used |cffffd200%d|r log%s."):format(logContext.logsCount, logContext.logsCount == 1 and "" or "s")
+            lines[#lines + 1] = ("From |cffffd200%d|r training log%s."):format(logContext.logsCount, logContext.logsCount == 1 and "" or "s")
+        end
+        if logContext and type(logContext.logLabelById) == "table" then
+            local labels = {}
+            for _, lbl in pairs(logContext.logLabelById) do
+                table.insert(labels, tostring(lbl))
+            end
+            if #labels > 0 then
+                table.sort(labels)
+                local shown = labels[1]
+                for i = 2, math.min(#labels, 4) do
+                    shown = shown .. ", " .. labels[i]
+                end
+                if #labels > 4 then
+                    shown = shown .. (" (+%d more)"):format(#labels - 4)
+                end
+                lines[#lines + 1] = ("Using logs: |cffd0d0d0%s|r"):format(shown)
+            end
+        end
+        lines[#lines + 1] = ""
+        if #spellLines == 0 then
+            lines[#lines + 1] = "|cffff4444(No spells found - run a test first)|r"
         else
-            lines[#lines + 1] = "figured out a good order to press your buttons."
-        end
-        lines[#lines + 1] = ""
-        lines[#lines + 1] = "|cff66ff66HOW STRONG IS IT|r"
-        local dpsScore = score or 0
-        lines[#lines + 1] = ("|cffffd200Score:|r %s  (higher = better DPS)"):format(Addon.FormatNumber(dpsScore))
-        if duration and duration > 0 then
-            lines[#lines + 1] = ("|cffffd200Based on:|r %d seconds of fighting"):format(math.floor(duration))
-        end
-        lines[#lines + 1] = ""
-        lines[#lines + 1] = "|cff66ff66WHAT THE MACRO DOES (in the order GRIP-EMS will fire)|r"
-        lines[#lines + 1] = ""
-        if #macros == 0 then
-            lines[#lines + 1] = "|cffff4444(Empty - I didn't find any spells to include)|r"
-        else
-            for i, m in ipairs(macros) do
-                local spell = m:match("/%a+ %[combat%] (.+)")
-                lines[#lines + 1] = ("|cffd0d0d0Step %d.|r |cffffff66%s|r"):format(i, tostring(spell or m))
+            for _, s in ipairs(spellLines) do
+                lines[#lines + 1] = ("|cffffff66%s|r"):format(s)
             end
         end
         lines[#lines + 1] = ""
-        lines[#lines + 1] = "|cff66ff66WHY THIS ORDER|r"
-        lines[#lines + 1] = ""
-        if type(deficitInfo) == "table" and #deficitInfo > 0 then
-            lines[#lines + 1] = "I compare what |cffffd200you|r actually pressed to what |cffffd200SimulationCraft|r says"
-            lines[#lines + 1] = "you SHOULD press. Spells you're NOT pressing enough get pushed earlier."
-            lines[#lines + 1] = ""
-            for _, d in ipairs(deficitInfo) do
-                local arrow = d.deficit and d.deficit > 0 and "<<PUSH EARLIER>>" or "OK"
-                local col  = d.deficit and d.deficit > 0 and "|cffff8844" or "|cff66ff66"
-                lines[#lines + 1] = ("|cffffff66%-22s|r %sdef=%.2f  actual=%.0f%%  simc=%.0f%%  %s|r"):format(
-                    (d.spell or ""):sub(1, 22), col, d.deficit or 0,
-                    (d.actualRatio or 0) * 100, (d.simcRatio or 0) * 100, arrow)
-            end
-        else
-            lines[#lines + 1] = "I tried every swap, insert, and reorder to find the best order."
-            lines[#lines + 1] = "I picked the one that scored the highest for your character."
-        end
-        if logContext and type(logContext.logLabelById) == "table" and next(logContext.logLabelById) then
-            lines[#lines + 1] = ""
-            lines[#lines + 1] = "|cff66ff66LOGS USED|r"
-            lines[#lines + 1] = ""
-            local anyShown = false
-            for id, label in pairs(logContext.logLabelById) do
-                lines[#lines + 1] = ("|cffffff66- Log #%d|r  %s"):format(id, tostring(label or "(unnamed)"))
-                anyShown = true
-            end
-            if not anyShown then
-                lines[#lines + 1] = "|cffd0d0d0- log details available in Saved Logs tab|r"
-            end
-        end
-        lines[#lines + 1] = ""
-        lines[#lines + 1] = "|cffaaaaaa--- next: hit Push to GRIP-EMS to upload ---|r"
+        lines[#lines + 1] = "|cffaaaaaa--- Push to GRIP-EMS to upload ---|r"
     elseif mode == "next" then
-        lines[#lines + 1] = "|cff66aaff=== THE NEXT SEQUENCE (iteration)|r"
+        lines[#lines + 1] = "|cff66aaff=== THE NEXT SEQUENCE ===|r"
         lines[#lines + 1] = ""
         if hasBaseline then
-            if logContext and logContext.logLabel then
-                lines[#lines + 1] = ("|cffffd200Comparing against LOG:|r |cffffff66%s|r (#%d)"):format(tostring(logContext.logLabel), logContext.id or 0)
-                lines[#lines + 1] = ""
-            end
-            lines[#lines + 1] = "What this means: I took the |cffffd200last sequence|r you saw, shook it up a"
-            lines[#lines + 1] = "bit, and ran the optimizer again. The new version should help with these"
-            lines[#lines + 1] = "weak spots from your last test:"
-            lines[#lines + 1] = ""
+            lines[#lines + 1] = "|cffd0d0d0New iteration of your last sequence.|r"
         else
-            lines[#lines + 1] = "What this means: This is your |cffffd200first sequence|r. Run a training dummy"
-            lines[#lines + 1] = "test, then come back and click 'Next Sequence' to iterate and improve it."
-            lines[#lines + 1] = ""
-            lines[#lines + 1] = "I built this order fresh from your cast data:"
-            lines[#lines + 1] = ""
-        end
-        if type(deficitInfo) == "table" and #deficitInfo > 0 then
-            local targetCount = 0
-            for _, d in ipairs(deficitInfo) do
-                if d.deficit and d.deficit > 0 then targetCount = targetCount + 1 end
-            end
-            if targetCount == 0 then
-                if hasBaseline then
-                    lines[#lines + 1] = "|cff66ff66You were already hitting every spell enough - try a fresh log.|r"
-                else
-                    lines[#lines + 1] = "|cff66ff66Your rotation looks solid. Run a test, then come back to iterate.|r"
-                end
-            else
-                lines[#lines + 1] = ("|cffaaaaaa%d spell%s I'll try to fix:|r"):format(targetCount, targetCount == 1 and "" or "s")
-                lines[#lines + 1] = ""
-                for _, d in ipairs(deficitInfo) do
-                    if d.deficit and d.deficit > 0 then
-                        local spell = (d.spell or ""):sub(1, 22)
-                        lines[#lines + 1] = ("|cffff8844!! %-22s|r  you pressed |cffffd200%.0f%%|r, should be |cffffd200%.0f%%|r"):format(
-                            spell, (d.actualRatio or 0) * 100, (d.simcRatio or 0) * 100)
-                        lines[#lines + 1] = ("|cffaaaaaa    (target: use it %d more time%s)|r"):format(
-                            math.max(1, math.floor((d.deficit or 1) * 4)),
-                            math.max(1, math.floor((d.deficit or 1) * 4)) == 1 and "" or "s")
-                    end
-                end
-            end
-        elseif hasBaseline ~= false then
-            lines[#lines + 1] = "|cffaaaaaa(no specific weak spots detected - re-running for variety)|r"
+            lines[#lines + 1] = "|cffd0d0d0Your first sequence. Run a test, then hit Next to improve it.|r"
         end
         lines[#lines + 1] = ""
-        lines[#lines + 1] = "|cff66aaffWHAT I'M GOING TO TRY (the new macro order)|r"
-        lines[#lines + 1] = ""
-        if #macros == 0 then
-            lines[#lines + 1] = "|cffff4444(Empty - I didn't find spells to improve)|r"
+        if #spellLines == 0 then
+            lines[#lines + 1] = "|cffff4444(No spells found - run a test first)|r"
         else
-            for i, m in ipairs(macros) do
-                local spell = m:match("/%a+ %[combat%] (.+)")
-                -- Annotate NEW positions vs the old bestSeq
-                lines[#lines + 1] = ("|cffd0d0d0Step %d.|r |cffffff66%s|r"):format(i, tostring(spell or m))
+            for _, s in ipairs(spellLines) do
+                lines[#lines + 1] = ("|cffffff66%s|r"):format(s)
             end
         end
         lines[#lines + 1] = ""
-        if duration and duration > 0 then
-            lines[#lines + 1] = ("|cffaaaaaaPredicted per %d sec test:|r Score = |cffffd200%s|r"):format(
-                math.floor(duration), Addon.FormatNumber(score or 0))
+        if duration and duration > 0 and score then
+            lines[#lines + 1] = ("|cffaaaaaaPredicted per %d sec test:|r Score = |cffffd200%s|r"):format(math.floor(duration), Addon.FormatNumber(score))
         end
         lines[#lines + 1] = ""
-        lines[#lines + 1] = "|cffaaaaaa--- next: iterate, test, iterate. Push to GRIP-EMS when ready ---|r"
+        lines[#lines + 1] = "|cffaaaaaa--- Push to GRIP-EMS when ready ---|r"
     end
     return table.concat(lines, "\n")
 end

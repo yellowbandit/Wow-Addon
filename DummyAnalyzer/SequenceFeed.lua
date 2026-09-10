@@ -644,20 +644,43 @@ local function ShowConfigureDialog(parent)
             db.settings = s
         end
 
+        local function SetRowState(row, lbl, name, i)
+            local st = StateOf(name)
+            if st == "Always" then
+                row:SetBackdropColor(1, 1, 1, 0.16)
+                lbl:SetText(name .. "   [Always]")
+                lbl:SetTextColor(1, 1, 1, 1)
+            elseif st == "Never" then
+                row:SetBackdropColor(0, 0, 0, 0.45)
+                lbl:SetText(name .. "   [Never]")
+                lbl:SetTextColor(0.45, 0.45, 0.45, 1)
+            else
+                if math.fmod(i, 2) == 0 then
+                    row:SetBackdropColor(0, 0, 0, 0.08)
+                else
+                    row:SetBackdropColor(1, 1, 1, 0.03)
+                end
+                lbl:SetText(name)
+                lbl:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
+            end
+        end
+
         for i, name in ipairs(spellPool) do
-            local row = CreateFrame("Frame", nil, spellContainer)
+            local row = CreateFrame("Frame", nil, spellContainer, "BackdropTemplate")
             row:SetPoint("TOPLEFT", spellContainer, "TOPLEFT", 0, -(i - 1) * 22)
             row:SetPoint("RIGHT", spellContainer, "RIGHT", 0, 0)
             row:SetHeight(20)
+            row:SetBackdrop({ bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0 })
             local lbl = row:CreateFontString(nil, "OVERLAY")
             SafeSetFont(lbl, FONT, 11)
-            lbl:SetPoint("LEFT", row, "LEFT", 0, 0)
+            lbl:SetPoint("LEFT", row, "LEFT", 6, 0)
             lbl:SetText(name)
-            lbl:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
+            SetRowState(row, lbl, name, i)
             local stateDd = MakeStyledDropdown(row, {"Auto", "Always", "Never"}, StateOf(name), function(st)
                 SetState(name, st)
+                SetRowState(row, lbl, name, i)
             end, 80)
-            stateDd:SetPoint("RIGHT", row, "RIGHT", -2, 0)
+            stateDd:SetPoint("LEFT", lbl, "RIGHT", 10, 0)
         end
 
         spellContainer:SetHeight(math.max(30, #spellPool * 22))
@@ -866,22 +889,22 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         seqScore = seqScore or 0
         local macros, ordNames = ParseSequenceLines(rawSeqText)
         seqText = table.concat(macros, "\n")
+        local fullStepNames = {}
+        for _, m in ipairs(macros) do
+            local sn = ExtractSpellFromSeqLine(m)
+            if sn and sn ~= "" then fullStepNames[#fullStepNames + 1] = sn end
+        end
         local normScore = seqScore / math.max(playerDuration or 1, 1)
         if not Addon.bestSequence then Addon.bestSequence = {score = 0, normScore = 0} end
         if not Addon.bestSequence.normScore then Addon.bestSequence.normScore = 0 end
         if normScore > (Addon.bestSequence.normScore or 0) then
-            local fullStepNames = {}
-            for _, m in ipairs(macros) do
-                local sn = ExtractSpellFromSeqLine(m)
-                if sn then fullStepNames[#fullStepNames + 1] = sn end
-            end
             Addon.bestSequence = {score = seqScore, normScore = normScore, seqText = seqText, importStr = importStr, reasoningText = reasoningText, orderedSpellNames = ordNames, fullSteps = fullStepNames}
         end
-        do -- auto-push
+        do -- auto-push: push the CURRENTLY-DISPLAYED steps (fresh seqText-derived),
+            -- never a stale persisted bestSequence fullSteps cache.
             local s = (GetCharDB()).settings or {}
-            if s.autoPush and Addon.bestSequence and Addon.bestSequence.fullSteps and #Addon.bestSequence.fullSteps > 0 then
-                local fs = Addon.bestSequence.fullSteps
-                C_Timer.After(0.5, function() Ems_PushBestSequence(fs) end)
+            if s.autoPush and #fullStepNames > 0 then
+                C_Timer.After(0.5, function() Ems_PushBestSequence(fullStepNames) end)
             end
         end
         local persistDb = GetCharDB()
@@ -948,106 +971,67 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         return (s or "") .. "\n\n" .. (i or "") .. "\n\n" .. (r or "")
     end
 
-    -- "Best Sequence" button — aggregates ALL test logs and runs full optimizer
+-- "Best Sequence" button — picks the best (highest DPS) training log and shows its stored/generated sequence. Deterministic: does NOT re-run the random hill-climber.
     bestBtn = CreateStyledButton(tabRow, "Best Sequence", 140, 28, function()
         local db = GetCharDB()
-        local aggCast, aggDmg, aggBuff, aggBuffGaps = {}, {}, {}, {}
-        local totalDuration = 0
         local logCount = 0
-        for _, log in ipairs(db.logs) do
+        local bestLog, bestDPS = nil, 0
+        for _, log in ipairs(db.logs or {}) do
             if not log.isSimC and log.castCounts and next(log.castCounts) then
-                local dur = (log.duration or 1) > 0 and log.duration or 1
-                totalDuration = totalDuration + dur
                 logCount = logCount + 1
-                for spell, count in pairs(log.castCounts) do
-                    aggCast[spell] = (aggCast[spell] or 0) + count
-                end
+                local dmgTotal = 0
                 if log.damageData then
-                    for spell, d in pairs(log.damageData) do
-                        if not aggDmg[spell] then aggDmg[spell] = { total = 0, hits = 0 } end
-                        aggDmg[spell].total = (aggDmg[spell].total or 0) + (d.total or 0)
-                        aggDmg[spell].hits = (aggDmg[spell].hits or 0) + (d.hits or 0)
+                    for _, d in pairs(log.damageData) do
+                        dmgTotal = dmgTotal + (d.total or 0)
                     end
                 end
-                if log.buffUptime then
-                    for key, info in pairs(log.buffUptime) do
-                        if not aggBuff[key] then aggBuff[key] = { name = info.name, uptime = 0, weight = 0 } end
-                        aggBuff[key].uptime = aggBuff[key].uptime + (info.uptime or 0) * dur
-                        aggBuff[key].weight = aggBuff[key].weight + dur
-                    end
-                end
-                if log.buffGaps then
-                    for key, data in pairs(log.buffGaps) do
-                        if not aggBuffGaps[key] then aggBuffGaps[key] = { name = data.name, gaps = {} } end
-                        for _, g in ipairs(data.gaps) do
-                            table.insert(aggBuffGaps[key].gaps, g)
-                        end
-                    end
-                end
-            end
-        end
-        for key, info in pairs(aggBuff) do
-            if info.weight > 0 then
-                aggBuff[key] = { name = info.name, uptime = info.uptime / info.weight }
+                local dur = (log.duration or 1) > 0 and log.duration or 1
+                local dps = dmgTotal / dur
+                if dps > bestDPS then bestDPS, bestLog = dps, log end
             end
         end
         if logCount == 0 then
             print("|cff33ff33[DummyAnalyzer]|r No training logs found. Run tests first.")
             return
         end
-        -- Use highest-DPS saved log with a GRIP-EMS sequence directly
-        local bestLog, bestDPS = nil, 0
-        for _, log in ipairs(db.logs) do
-            if not log.isSimC and log.emsSeqText and log.emsSeqText ~= "" and (log.dps or 0) > bestDPS then
-                bestLog, bestDPS = log, log.dps or 0
-            end
+        if not bestLog then
+            print("|cff33ff33[DummyAnalyzer]|r No training logs contain damage data. Run tests first.")
+            return
         end
-        if bestLog then
-            local macros, ordered = ParseSequenceLines(bestLog.emsSeqText)
-            if #macros > 0 then
-                local ctx = { logsCount = 1, logLabelById = { [bestLog.id or 0] = LogDisplayName(bestLog) } }
-                local deficit = ComputeDeficitSnapshot(bestLog.castCounts or {}, db.simcData, bestLog.duration or 1)
-                local display = BuildKidFriendlyDisplay("best", ctx, bestDPS, bestLog.duration or 1, macros, ordered, deficit)
-                local fullStepNames = {}
-                for _, m in ipairs(macros) do
-                    local sn = ExtractSpellFromSeqLine(m)
-                    if sn then fullStepNames[#fullStepNames + 1] = sn end
-                end
-                Addon.bestSequence = {score = bestDPS, normScore = bestDPS / math.max(bestLog.duration or 1, 1), seqText = table.concat(macros, "\n"), importStr = "", reasoningText = "", orderedSpellNames = ordered, fullSteps = fullStepNames}
-                db.bestSequence = Addon.bestSequence
-                do -- auto-push
-                    local s = db.settings or {}
-                    if s.autoPush and fullStepNames and #fullStepNames > 0 then
-                        C_Timer.After(0.5, function() Ems_PushBestSequence(fullStepNames) end)
-                    end
-                end
-                seqText = table.concat(macros, "\n")
-                importStr = ""; reasoningText = ""
-                HighlightTab(bestBtn)
-                SetEditText(GetSimcWarning() .. display)
-                print(string.format("|cff33ff33[DummyAnalyzer]|r Best sequence from log: %s (%s DPS)", LogDisplayName(bestLog), Addon.FormatNumber(bestDPS)))
-                return
-            end
-        end
+        DebugLog("info", "BestSeq", string.format("%d logs total, best DPS log: %s", logCount, tostring(bestLog.id)))
         local reqSpells = CollectRequiredSpells()
-        DebugLog("info", "BestSeq", string.format("%d logs total", logCount))
-        local bestSeqStr, bestImportStr, bestReasonStr, bestScore = GenerateSuggestedSequence(aggCast, aggDmg, aggBuff, totalDuration, aggBuffGaps, nil, nil, nil, nil, nil, reqSpells)
-        if bestSeqStr then
+        -- Prefer the sequence stored with the best log; fall back to a deterministic rebuild from its casts.
+        local bestSeqStr = (bestLog.emsSeqText and bestLog.emsSeqText ~= "") and bestLog.emsSeqText
+            or GenerateEMSSequence(bestLog.castCounts, bestLog.damageData or {}, reqSpells, bestLog.buffUptime)
+        if bestSeqStr and bestSeqStr ~= "" then
             local macros, ordered = ParseSequenceLines(bestSeqStr)
+            local bestScore = bestDPS * math.max(bestLog.duration or 1, 1)
+            -- Context lists every saved log we considered, marking which one actually drove the sequence.
             local ctx = { logsCount = logCount, logLabelById = {} }
-            for _, log in ipairs(db.logs) do
-                if not log.isSimC then
-                    ctx.logLabelById[log.id or 0] = LogDisplayName(log)
+            for _, log in ipairs(db.logs or {}) do
+                if not log.isSimC and log.castCounts and next(log.castCounts) then
+                    local label = LogDisplayName(log)
+                    if log == bestLog then label = label .. " (best DPS — used)" end
+                    ctx.logLabelById[log.id or 0] = label
                 end
             end
-            local deficit = ComputeDeficitSnapshot(aggCast, db.simcData, totalDuration)
-            local display = BuildKidFriendlyDisplay("best", ctx, bestScore, totalDuration, macros, ordered, deficit)
+            if db.simcData and next(db.simcData) then
+                ctx.logLabelById[0] = ctx.logLabelById[0] or "SimC import (DPS weights)"
+            end
+            local deficit = ComputeDeficitSnapshot(bestLog.castCounts, db.simcData, bestLog.duration or 1)
+            local display = BuildKidFriendlyDisplay("best", ctx, bestScore, math.max(bestLog.duration or 1, 1), macros, ordered, deficit)
             local fullStepNames = {}
             for _, m in ipairs(macros) do
                 local sn = ExtractSpellFromSeqLine(m)
-                if sn then fullStepNames[#fullStepNames + 1] = sn end
+                if sn and sn ~= "" then fullStepNames[#fullStepNames + 1] = sn end
             end
-            Addon.bestSequence = {score = bestScore or 0, normScore = (bestScore or 0) / math.max(totalDuration, 1), seqText = table.concat(macros, "\n"), importStr = bestImportStr, reasoningText = bestReasonStr, orderedSpellNames = ordered, fullSteps = fullStepNames}
+            local bestImportStr = ""
+            if C_EncodingUtil then
+                local ok, s = pcall(GenerateEMSImportString, bestLog.castCounts, bestLog.damageData or {})
+                if ok and type(s) == "string" then bestImportStr = s end
+            end
+            local bestReasonStr = "Best DPS run from training logs."
+            Addon.bestSequence = {score = bestScore or 0, normScore = (bestScore or 0) / math.max(bestLog.duration or 1, 1), seqText = table.concat(macros, "\n"), importStr = bestImportStr, reasoningText = bestReasonStr, orderedSpellNames = ordered, fullSteps = fullStepNames}
             do -- auto-push
                 local s = (GetCharDB()).settings or {}
                 if s.autoPush and fullStepNames and #fullStepNames > 0 then
@@ -1056,21 +1040,14 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
             end
             local db3 = GetCharDB()
             db3.bestSequence = Addon.bestSequence
-            -- Dedup: only save to history if the sequence text differs from the most recent entry
-            if not db3.optimizerHistory then db3.optimizerHistory = {} end
-            local lastEntry = db3.optimizerHistory[1]
-            if not lastEntry or lastEntry.seqText ~= bestSeqStr then
-                table.insert(db3.optimizerHistory, 1, {timestamp = time(), score = bestScore, seqText = bestSeqStr, importStr = bestImportStr, reasoningText = bestReasonStr})
-                if #db3.optimizerHistory > 20 then table.remove(db3.optimizerHistory) end
-            end
 
             seqText = table.concat(macros, "\n")  -- ONLY /cast lines, so Push fallback always works
             importStr = bestImportStr; reasoningText = bestReasonStr
             HighlightTab(bestBtn)
             SetEditText(GetSimcWarning() .. display)
-            print(string.format("|cff33ff33[DummyAnalyzer]|r Best sequence from %d logs (score: %s)", logCount, Addon.FormatNumber(bestScore or 0)))
+            print(string.format("|cff33ff33[DummyAnalyzer]|r Best sequence from %d logs (best DPS run, score: %s)", logCount, Addon.FormatNumber(bestScore or 0)))
         else
-            print("|cff33ff33[DummyAnalyzer]|r Failed to generate best sequence from %d logs.", logCount)
+            print("|cff33ff33[DummyAnalyzer]|r Failed to build best sequence from the top DPS log.")
         end
     end, "primary")
     bestBtn:SetPoint("LEFT", tabRow, "LEFT", 0, 0)
@@ -1095,7 +1072,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         local fullStepNames = {}
         for _, m in ipairs(macros) do
             local sn = ExtractSpellFromSeqLine(m)
-            if sn then fullStepNames[#fullStepNames + 1] = sn end
+            if sn and sn ~= "" then fullStepNames[#fullStepNames + 1] = sn end
         end
         local simcImportStr = GenerateEMSImportString(simcCastCounts, simcDamage)
         -- Update closure variables in-place (same pattern as Best/Next buttons)
@@ -1122,7 +1099,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         if seqText then
             for line in seqText:gmatch("[^\r\n]+") do
                 local name = ExtractSpellFromSeqLine(line)
-                if name then table.insert(steps, name) end
+                if name and name ~= "" then table.insert(steps, name) end
             end
         end
         local ccCount = 0; if castCounts then for _ in pairs(castCounts) do ccCount = ccCount + 1 end end
@@ -1159,7 +1136,7 @@ HighlightTab(nextBtn)
                 local fullStepNames = {}
                 for _, m in ipairs(macros) do
                     local sn = ExtractSpellFromSeqLine(m)
-                    if sn then fullStepNames[#fullStepNames + 1] = sn end
+                    if sn and sn ~= "" then fullStepNames[#fullStepNames + 1] = sn end
                 end
                 Addon.bestSequence = {score = nScore or 0, normScore = normS, seqText = table.concat(macros, "\n"), importStr = nImp, reasoningText = nReason, orderedSpellNames = ordered, fullSteps = fullStepNames}
             end
@@ -1199,7 +1176,7 @@ local function ExtractAllSteps(src)
     local steps = {}
     for line in src:gmatch("[^\n]+") do
         local name = ExtractSpellFromSeqLine(line)
-        if name then steps[#steps + 1] = name end
+        if name and name ~= "" then steps[#steps + 1] = name end
     end
     return steps
 end
@@ -1374,7 +1351,52 @@ local pushBtn = CreateStyledButton(bottomRow, "Push to GRIP-EMS", 170, 32, funct
     closeBtn2:SetPoint("RIGHT", bottomRow, "RIGHT", 0, 0)
 
     local initContent
-    if suggestMode and Addon.bestSequence and Addon.bestSequence.seqText and Addon.bestSequence.seqText ~= "" then
+    local dbInit = GetCharDB()
+    local realLogCount = 0
+    if type(dbInit.logs) == "table" then
+        for _, log in ipairs(dbInit.logs) do
+            if not log.isSimC and log.castCounts and next(log.castCounts) then
+                realLogCount = realLogCount + 1
+            end
+        end
+    end
+    if suggestMode and realLogCount == 0 then
+        -- No real training logs yet: never default to a stale persisted best sequence.
+        -- Prefer a clean SimC-derived state (highlight From SimC) or an empty-state message.
+        if dbInit.simcData and dbInit.simcData.castCounts and next(dbInit.simcData.castCounts) then
+            local simcSeqText = GenerateEMSSequence(dbInit.simcData.castCounts, dbInit.simcData.damageData or {})
+            if simcSeqText and simcSeqText ~= "" then
+                local macros, ordered = ParseSequenceLines(simcSeqText)
+                local fullStepNames = {}
+                for _, m in ipairs(macros) do
+                    local sn = ExtractSpellFromSeqLine(m)
+                    if sn and sn ~= "" then fullStepNames[#fullStepNames + 1] = sn end
+                end
+                local impOK, simcImportStr
+                if C_EncodingUtil then impOK, simcImportStr = pcall(GenerateEMSImportString, dbInit.simcData.castCounts, dbInit.simcData.damageData or {}) end
+                seqText = simcSeqText
+                importStr = impOK and simcImportStr or ""
+                reasoningText = "Generated from SimC import (no real logs)."
+                Addon.bestSequence = { score = 0, normScore = 0, seqText = seqText, importStr = importStr, reasoningText = reasoningText, orderedSpellNames = ordered, fullSteps = fullStepNames }
+                dbInit.bestSequence = Addon.bestSequence
+                HighlightTab(simcBtn)
+                local simcDeficit = ComputeDeficitSnapshot(dbInit.simcData.castCounts, dbInit.simcData, 0)
+                local simcDisplay = BuildKidFriendlyDisplay("best", { logLabel = "SimC", id = nil }, 0, 1, macros, ordered, simcDeficit)
+                initContent = GetSimcWarning() .. simcDisplay .. "\n\n|cffffff00Run a training dummy test, then click Best Sequence to optimize.|r"
+            else
+                initContent = GetSimcWarning() .. "|cffd0d0d0No sequences yet.|r\n\nClick From SimC, or run a training dummy test and click Best Sequence."
+            end
+        else
+            initContent = GetSimcWarning() .. "|cffd0d0d0No training logs or SimC data yet.|r\n\nRun a training dummy test or import a SimC report, then build your sequence."
+        end
+    elseif suggestMode and seqText and seqText ~= "" then
+        -- Prefer the FRESH precomputed seqText (always what would be pushed).
+        -- This keeps the display identical to what auto-push / Push-to-GRIP sends.
+        local macros, ordered = ParseSequenceLines(seqText)
+        local ctx = { logLabel = "suggested", id = nil }
+        local deficit = ComputeDeficitSnapshot(castCounts, GetCharDB().simcData, playerDuration)
+        initContent = GetSimcWarning() .. BuildKidFriendlyDisplay("best", ctx, seqScore or 0, playerDuration or 1, macros, ordered, deficit)
+    elseif suggestMode and Addon.bestSequence and Addon.bestSequence.seqText and Addon.bestSequence.seqText ~= "" then
         local macros, ordered = ParseSequenceLines(Addon.bestSequence.seqText)
         local ctx = { logLabel = "suggested", id = nil }
         local deficit = ComputeDeficitSnapshot(castCounts, GetCharDB().simcData, playerDuration)

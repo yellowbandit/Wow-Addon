@@ -100,17 +100,6 @@ local function CreateReportPopup()
     end, "primary")
     selectBtn:SetPoint("LEFT", bottomRow, "LEFT", 0, 0)
 
-    local mdBtn = CreateStyledButton(bottomRow, "Copy Markdown", 120, 32, function()
-        local mdElapsed = (Addon.testActive and (GetTime() - Addon.startTime)) or (Addon.testEndTime and (Addon.testEndTime - Addon.startTime)) or 0
-        local mdCastCounts = {}
-        for _, spell in ipairs(Addon.spellHistory) do
-            mdCastCounts[spell.name] = (mdCastCounts[spell.name] or 0) + 1
-        end
-        local mdText = GenerateMarkdownReport(nil, mdElapsed, Addon.totalDamage, #Addon.spellHistory, mdCastCounts, Addon.damageData, Addon.buffUptime, Addon.buffGaps, nil, Addon.debuffUptime, Addon.spellPowerCosts)
-        ShowCopyDialog(mdText)
-    end)
-    mdBtn:SetPoint("LEFT", selectBtn, "RIGHT", 10, 0)
-
     local refreshBtn = CreateStyledButton(bottomRow, "Refresh Report", 120, 32, function()
         if Addon.reportPopup.originalText then
             Addon.reportPopup.editBox:SetText(Addon.reportPopup.originalText)
@@ -118,7 +107,7 @@ local function CreateReportPopup()
             Addon.reportPopup.scrollFrame:SetVerticalScroll(0)
         end
     end)
-    refreshBtn:SetPoint("LEFT", mdBtn, "RIGHT", 10, 0)
+    refreshBtn:SetPoint("LEFT", selectBtn, "RIGHT", 10, 0)
 
     local closePopupBtn = CreateStyledButton(bottomRow, "Close", 100, 32, function() Addon.reportPopup:Hide() end, "danger")
     closePopupBtn:SetPoint("RIGHT", bottomRow, "RIGHT", 0, 0)

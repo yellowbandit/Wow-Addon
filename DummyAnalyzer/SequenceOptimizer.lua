@@ -129,6 +129,43 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
         end
     end
 
+    -- Required spells (Spells tab "Always") forced into the rotation.
+    -- They become real optimization participants (dpc fill below) and
+    -- Always-wins over Never (the neverSet filter keeps them).
+    local reqSet = {}
+    if requiredSpells and type(requiredSpells) == "table" then
+        for _, reqName in ipairs(requiredSpells) do
+            if type(reqName) == "string" and reqName ~= "" and IsValidMacroSpell(reqName) then
+                reqSet[reqName] = true
+                local found = false
+                for _, e in ipairs(baseEntries) do
+                    if e.name == reqName then found = true; break end
+                end
+                if not found then
+                    table.insert(baseEntries, { name = reqName, dmg = 0, count = 0, dpc = 0 })
+                end
+            end
+        end
+    end
+
+    -- Never spells (Spells tab "Never") are excluded from the rotation
+    local neverSet = {}
+    if cfg and type(cfg.neverSpells) == "table" then
+        for _, n in ipairs(cfg.neverSpells) do
+            if type(n) == "string" then
+                local nn = n:gsub("^%s*(.-)%s*$", "%1")
+                if nn ~= "" then neverSet[nn] = true end
+            end
+        end
+    end
+    if next(neverSet) then
+        local kept = {}
+        for _, e in ipairs(baseEntries) do
+            if not neverSet[e.name] or reqSet[e.name] then kept[#kept + 1] = e end
+        end
+        baseEntries = kept
+    end
+
     if #baseEntries == 0 then
         return "No castable spells found.", nil, "All spells filtered out."
     end
@@ -156,6 +193,20 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
         actualRatios[e.name] = actualRatio
         simcRatios[e.name]  = simcRatio
         deficitMat[e.name]  = (simcRatio > 0) and (actualRatio / simcRatio) or (actualRatio > 0 and 10 or 1)
+    end
+
+    -- Required spells ("Always") become REAL optimization participants: give them
+    -- a presence (count >= 1) and a damage-per-cast so the hill-climber can move
+    -- them around instead of leaving a 0-dmg/0-dpc entry pinned at the bottom.
+    -- Patched AFTER the deficit matrix so their deficit stays neutral (=1).
+    if next(reqSet) then
+        for _, e in ipairs(baseEntries) do
+            if reqSet[e.name] and e.dpc <= 0 then
+                e.count = math.max(e.count or 0, 1)
+                e.dpc = avgDmg
+                e.dmg = e.dpc * e.count
+            end
+        end
     end
 
     -- =====================================================
@@ -334,7 +385,7 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
         if seedSteps and #seedSteps > 0 then
             local seen, result = {}, {}
             for _, name in ipairs(seedSteps) do
-                if not seen[name] and IsValidMacroSpell(name) then
+                if not seen[name] and IsValidMacroSpell(name) and not neverSet[name] then
                     seen[name] = true
                     table.insert(result, name)
                 end
@@ -454,7 +505,7 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
     local seenUniq    = {}
 
     for _, name in ipairs(bestSequence) do
-        if not seenUniq[name] then
+        if not seenUniq[name] and not neverSet[name] then
             seenUniq[name] = true
             table.insert(uniqueOrder, name)
         end
