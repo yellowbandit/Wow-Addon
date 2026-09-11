@@ -543,10 +543,20 @@ local function CreateSavedLogsBrowser()
     local clogImportBtn = CreateStyledButton(Addon.savedLogsFrame, "Combat Log", 110, 28, Addon.ShowCombatLogImportDialog)
     clogImportBtn:SetPoint("LEFT", viewSeqBtn, "RIGHT", 10, 0)
 
-    local scrollFrame = CreateFrame("ScrollFrame", nil, Addon.savedLogsFrame)
+    local scrollFrame = CreateFrame("ScrollFrame", nil, Addon.savedLogsFrame, "UIPanelScrollFrameTemplate")
     scrollFrame:SetPoint("TOPLEFT", Addon.savedLogsFrame, "TOPLEFT", 20, -130)
     scrollFrame:SetPoint("BOTTOMRIGHT", Addon.savedLogsFrame, "BOTTOMRIGHT", -40, 50)
     scrollFrame:EnableMouseWheel(true)
+    scrollFrame:SetScript("OnMouseWheel", function(self, delta)
+        local current = self:GetVerticalScroll()
+        local maxScroll = self:GetVerticalScrollRange()
+        local step = 46
+        if delta > 0 then
+            self:SetVerticalScroll(math.max(0, current - step))
+        else
+            self:SetVerticalScroll(math.min(maxScroll, current + step))
+        end
+    end)
 
     local listContainer = CreateFrame("Frame", nil, scrollFrame)
     listContainer:SetWidth(480)

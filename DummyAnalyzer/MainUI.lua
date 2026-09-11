@@ -5,6 +5,7 @@ local AddonName, Addon = ...
 local GetCharDB = Addon.GetCharDB
 local DeleteLog = Addon.DeleteLog
 local LogDisplayName = Addon.LogDisplayName
+local ShortNum = Addon.ShortNum
 local GenerateEMSSequence = Addon.GenerateEMSSequence
 local ExtractSpellFromSeqLine = Addon.ExtractSpellFromSeqLine
 local IsValidMacroSpell = Addon.IsValidMacroSpell
@@ -44,8 +45,18 @@ local function ShowEMSComparison(selectedIds)
 
     -- Build comparison text
     local lines = {}
+    local bestDpsLog, bestDps = nil, 0
+    for _, log in ipairs(selectedLogs) do
+        local d = log.dps or 0
+        if d > bestDps then bestDps, bestDpsLog = d, log end
+    end
     table.insert(lines, "=== SEQUENCE COMPARISON ===\n")
-    table.insert(lines, "Comparing " .. #selectedLogs .. " logs:\n")
+    if bestDpsLog then
+        table.insert(lines, string.format("Compared %d logs | Best: %s (%s DPS)",
+            #selectedLogs, LogDisplayName(bestDpsLog), Addon.FormatNumber(bestDps)))
+    else
+        table.insert(lines, "Comparing " .. #selectedLogs .. " logs:")
+    end
 
     -- For each log, show vertical sequence breakdown and DPS
     local allSpells = {}
@@ -142,7 +153,9 @@ local function ShowEMSComparison(selectedIds)
         local pct = maxDps > 0 and (ld.dps / maxDps * 100) or 0
         local barLen = math.floor(pct / 5)
         local bar = string.rep("#", barLen)
-        table.insert(lines, string.format("%-25s %s DPS (%5.1f%%) %s", ld.label, Addon.FormatNumber(ld.dps), pct, bar))
+        local diff = ld.dps - maxDps
+        local diffStr = ld.dps >= maxDps and ("+" .. ShortNum(diff)) or ShortNum(diff)
+        table.insert(lines, string.format("%-25s %s DPS (%5.1f%%) %7s  %s", ld.label, Addon.FormatNumber(ld.dps), pct, diffStr, bar))
     end
 
     -- Per-spell positional analysis
@@ -213,10 +226,17 @@ local function ShowEMSComparison(selectedIds)
             table.insert(simcSorted, {spell = spell, pct = pct})
         end
         table.sort(simcSorted, function(a, b) return a.pct < b.pct end)
-        table.insert(lines, "\n  SimC comparison (% of target):")
+        local underCount, overCount = 0, 0
         for _, s in ipairs(simcSorted) do
-            local flag = s.pct < 85 and " << under" or (s.pct > 115 and " >> over" or "")
-            table.insert(lines, string.format("    %s: %d%%%s", s.spell, s.pct, flag))
+            if s.pct < 85 then underCount = underCount + 1
+            elseif s.pct > 115 then overCount = overCount + 1 end
+        end
+        table.insert(lines, "\n  SimC comparison (% of target):")
+        table.insert(lines, string.format("    %d spell%s under target, %d spell%s over target",
+            underCount, underCount == 1 and "" or "s", overCount, overCount == 1 and "" or "s"))
+        for _, s in ipairs(simcSorted) do
+            local marker = s.pct < 85 and "« UNDER" or (s.pct > 115 and "» OVER" or "")
+            table.insert(lines, string.format("    %-8s%s: %d%%", marker, s.spell, s.pct))
         end
         table.insert(lines, "\n  Use 'Generate Optimized' button to blend actual data with SimC targets.")
     else
