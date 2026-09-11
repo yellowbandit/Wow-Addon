@@ -543,6 +543,15 @@ local function CreateSavedLogsBrowser()
     local clogImportBtn = CreateStyledButton(Addon.savedLogsFrame, "Combat Log", 110, 28, Addon.ShowCombatLogImportDialog)
     clogImportBtn:SetPoint("LEFT", viewSeqBtn, "RIGHT", 10, 0)
 
+    local pruneBtn = CreateStyledButton(Addon.savedLogsFrame, "Prune Old Logs", 110, 28, function()
+        local keep = (GetCharDB().settings or {}).keepLogsPerSpec or 15
+        local pruned = Addon.PruneOldLogs(keep)
+        RefreshSavedLogsList()
+        if Addon.emsWindow and Addon.emsWindow.refresh then Addon.emsWindow.refresh() end
+        print(string.format("|cff33ff33[DummyAnalyzer]|r Pruned %d old log(s). Kept last %d per spec.", pruned, keep))
+    end)
+    pruneBtn:SetPoint("LEFT", clogImportBtn, "RIGHT", 10, 0)
+
     local scrollFrame = CreateFrame("ScrollFrame", nil, Addon.savedLogsFrame, "UIPanelScrollFrameTemplate")
     scrollFrame:SetPoint("TOPLEFT", Addon.savedLogsFrame, "TOPLEFT", 20, -130)
     scrollFrame:SetPoint("BOTTOMRIGHT", Addon.savedLogsFrame, "BOTTOMRIGHT", -40, 50)

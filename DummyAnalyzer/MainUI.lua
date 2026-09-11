@@ -1311,6 +1311,7 @@ end)
 minimapBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
 SLASH_DUMMYANALYZER1 = "/dummy"
+SLASH_DUMMYANALYZER2 = "/da"
 SlashCmdList["DUMMYANALYZER"] = function(msg)
     if msg == "" or msg == "show" then
         local frame = CreateMainFrame()
@@ -1319,8 +1320,14 @@ SlashCmdList["DUMMYANALYZER"] = function(msg)
     elseif msg == "2" then StartTest(2)
     elseif msg == "5" then StartTest(5)
     elseif msg == "stop" then StopTest()
+    elseif msg == "prune" then
+        local keep = (GetCharDB().settings or {}).keepLogsPerSpec or 15
+        local pruned = Addon.PruneOldLogs(keep)
+        if RefreshSavedLogsList then RefreshSavedLogsList() end
+        if Addon.emsWindow and Addon.emsWindow.refresh then Addon.emsWindow.refresh() end
+        print(string.format("|cff33ff33[DummyAnalyzer]|r Pruned %d old log(s). Kept last %d per spec.", pruned, keep))
     else
-        print("|cff33ff33[DummyAnalyzer]|r Commands: /dummy [show|30|2|5|stop]")
+        print("|cff33ff33[DummyAnalyzer]|r Commands: /dummy [show|30|2|5|stop|prune]")
     end
 end
 

@@ -353,6 +353,11 @@ local function SaveCurrentLog()
     local modSpellsList = {}
     for s in pairs(modSpells) do modSpellsList[#modSpellsList + 1] = s end
 
+    -- Resolve specialization name for spec grouping (nil-safe)
+    local specIndex = GetSpecialization()
+    local specName = specIndex and select(2, GetSpecializationInfo(specIndex)) or ""
+    if not specName or type(specName) ~= "string" or IsSecretValue(specName) then specName = "" end
+
     local log = {
         id = id,
         label = "#" .. id .. " " .. durMin .. " " .. Addon.FormatNumber(dps) .. (detectedSeqName and (" [" .. detectedSeqName .. "]") or " DPS"),
@@ -408,6 +413,38 @@ function Addon.DeleteLog(id)
             return
         end
     end
+end
+
+-- Keep only the newest keepPerSpec non-SimC logs per spec group.
+-- SimC reference logs are never deleted.
+-- Returns the number of deleted logs.
+function Addon.PruneOldLogs(keepPerSpec)
+    local db = GetCharDB()
+    if not db.settings then db.settings = {} end
+    if not db.settings.keepLogsPerSpec then db.settings.keepLogsPerSpec = 15 end
+    keepPerSpec = keepPerSpec or db.settings.keepLogsPerSpec or 15
+    if keepPerSpec < 0 then keepPerSpec = 0 end
+    local counts = {}
+    local kept = {}
+    local deleted = 0
+    for _, log in ipairs(db.logs) do
+        if log.isSimC then
+            table.insert(kept, log)
+        else
+            local spec = (log.specName and log.specName ~= "") and log.specName
+                or (log.spec and log.spec ~= "") and log.spec
+                or "unknown"
+            local n = counts[spec] or 0
+            if n < keepPerSpec then
+                counts[spec] = n + 1
+                table.insert(kept, log)
+            else
+                deleted = deleted + 1
+            end
+        end
+    end
+    db.logs = kept
+    return deleted
 end
 
 function Addon.RenameLog(id, newLabel)
