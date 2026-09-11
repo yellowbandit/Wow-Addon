@@ -538,6 +538,46 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
         end
     end
 
+    -- Short mixed rotation when SimC cast data exists: keep the whole list
+    -- around 12 steps, with each spell's copy count proportional to its
+    -- expected casts, but DISTRIBUTED round-robin so no spell ever repeats
+    -- in a long wall (long-CD/buff spells stay a single copy).
+    do
+        local simcTotal = 0
+        for _, name in ipairs(uniqueOrder) do
+            if not isLongCD(name) and not CAST_BUFF_DURATIONS_LOOKUP[name] then
+                simcTotal = simcTotal + ((simcCasts[name] or 0) * simcMult)
+            end
+        end
+        if simcTotal > 0 then
+            local budget = 12
+            local scale = math.min(1, budget / simcTotal)
+            local quotas = {}
+            for _, name in ipairs(uniqueOrder) do
+                local q = 1
+                if not (isLongCD(name) or CAST_BUFF_DURATIONS_LOOKUP[name]) then
+                    q = math.max(1, math.floor(((simcCasts[name] or 0) * simcMult) * scale))
+                end
+                quotas[name] = q
+            end
+            local rebuilt = {}
+            local rebuiltCounts = {}
+            local remaining = true
+            while remaining do
+                remaining = false
+                for _, name in ipairs(uniqueOrder) do
+                    if (quotas[name] or 0) > 0 then
+                        quotas[name] = quotas[name] - 1
+                        table.insert(rebuilt, name)
+                        rebuiltCounts[name] = (rebuiltCounts[name] or 0) + 1
+                        remaining = true
+                    end
+                end
+            end
+            finalSteps, stepCounts = rebuilt, rebuiltCounts
+        end
+    end
+
     -- Add deficit-driven extra duplicates for under-cast spells
     for _, name in ipairs(uniqueOrder) do
         if not isLongCD(name) then
