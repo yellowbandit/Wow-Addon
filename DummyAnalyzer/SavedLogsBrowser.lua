@@ -3,6 +3,7 @@ local AddonName, Addon = ...
 -- SAVED LOGS BROWSER UI
 -- ============================================
 local GetCharDB = Addon.GetCharDB
+local DeleteLog = Addon.DeleteLog
 local ShortNum = Addon.ShortNum
 local CreateStyledFrame = Addon.CreateStyledFrame
 local CreateStyledButton = Addon.CreateStyledButton
@@ -506,15 +507,8 @@ local function CreateSavedLogsBrowser()
             print("|cff33ff33[DummyAnalyzer]|r Select logs to delete.")
             return
         end
-        local slDb = GetCharDB()
         for _, slId in ipairs(toDelete) do
-            for i, log in ipairs(slDb.logs) do
-                if log.id == slId then
-                    if log.isSimC then slDb.simcLogId = 0 end
-                    table.remove(slDb.logs, i)
-                    break
-                end
-            end
+            DeleteLog(slId)
         end
         RefreshSavedLogsList()
         if Addon.emsWindow and Addon.emsWindow.refresh then Addon.emsWindow.refresh() end

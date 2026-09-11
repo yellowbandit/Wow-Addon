@@ -3,6 +3,7 @@ local AddonName, Addon = ...
 -- MAIN WINDOW, MINIMAP, SLASH, INIT
 -- ============================================
 local GetCharDB = Addon.GetCharDB
+local DeleteLog = Addon.DeleteLog
 local LogDisplayName = Addon.LogDisplayName
 local GenerateEMSSequence = Addon.GenerateEMSSequence
 local ExtractSpellFromSeqLine = Addon.ExtractSpellFromSeqLine
@@ -538,15 +539,8 @@ local function ShowEMSExportWindow()
             print("|cff33ff33[DummyAnalyzer]|r Select logs to delete.")
             return
         end
-        local delDb = GetCharDB()
         for _, delId in ipairs(toDelete) do
-            for i, log in ipairs(delDb.logs) do
-                if log.id == delId then
-                    if log.isSimC then delDb.simcLogId = 0 end
-                    table.remove(delDb.logs, i)
-                    break
-                end
-            end
+            DeleteLog(delId)
         end
         RefreshEMSLogList()
         local sf = _G["DummyAnalyzerSavedLogsFrame"]

@@ -514,38 +514,18 @@ local function ShowSimCImportDialog()
     scrollFrame:SetScrollChild(editBox)
     editBox:SetHeight(300)
 
-    local function doImport()
-        local text = editBox:GetText() or ""
-        if Addon.debugMode then
-            print(string.format("|cff33ff33[DummyAnalyzer Debug]|r Import text: %d chars total", #text))
-            if #text > 0 then
-                print("|cff33ff33[DummyAnalyzer Debug]|r First 200 chars: " .. text:sub(1, 200))
-                print("|cff33ff33[DummyAnalyzer Debug]|r Last 200 chars: " .. text:sub(-200))
-            end
-        end
-        if not text or text == "" then
-            print("|cff33ff33[DummyAnalyzer]|r Paste SimC output first.")
-            return
-        end
-        local parsed = Addon.ParseSimC(text)
-        if not parsed then
-            print("|cff33ff33[DummyAnalyzer]|r Could not parse SimC output. Make sure you pasted the full text from the Actions section onwards.")
-            return
-        end
-        -- Filter SimC data to only include spells DummyAnalyzer can track
-        -- (removes procs, passives, auto-attacks that don't show in the combat log as casts)
-        parsed.castCounts, parsed.damageData = FilterSimCData(parsed.castCounts, parsed.damageData)
+    local function applySimCImport(parsed)
         local db = GetCharDB()
         local label = "SimC: " .. string.format("%.0fK DPS", parsed.dps / 1000)
         -- Store extended SimC data for optimizer access
         db.simcData = {
             totalDPS = parsed.dps,
             activeBranch = parsed.activeBranch,
-aplOrder = parsed.aplOrder,
-              rawApl = parsed.rawApl,
-              spellWeights = parsed.spellWeights,
-              castCounts = parsed.castCounts,
-              buffBenefit = parsed.buffBenefit,
+            aplOrder = parsed.aplOrder,
+            rawApl = parsed.rawApl,
+            spellWeights = parsed.spellWeights,
+            castCounts = parsed.castCounts,
+            buffBenefit = parsed.buffBenefit,
             rageGains = parsed.rageGains,
             haste = parsed.haste,
             crit = parsed.crit,
@@ -554,7 +534,7 @@ aplOrder = parsed.aplOrder,
         }
         local existingId = db.simcLogId or 0
         if existingId > 0 then
-            for i, log in ipairs(db.logs) do
+            for _, log in ipairs(db.logs) do
                 if log.id == existingId then
                     log.label = label
                     log.dps = parsed.dps
@@ -566,17 +546,8 @@ aplOrder = parsed.aplOrder,
                     log.buffUptime = parsed.buffs
                     log.date = "SimC Simulation"
                     log.isSimC = true
-                    local upCount = 0
-                    local upSample = ""
-                    if parsed.damageData then
-                        for _ in pairs(parsed.damageData) do upCount = upCount + 1 end
-                        for name, d in pairs(parsed.damageData) do
-                            upSample = upSample .. string.format(" %s=%.0f", name, d.total or 0)
-                            if #upSample > 100 then break end
-                        end
-                    end
                     Addon.simcDialog:Hide()
-                    print(string.format("|cff33ff33[DummyAnalyzer]|r Updated SimC reference: %s (%d dmg entries%s)", label, upCount, upCount > 0 and (":" .. upSample) or ""))
+                    print(string.format("|cff33ff33[DummyAnalyzer]|r Updated SimC reference: %s", label))
                     return
                 end
             end
@@ -597,17 +568,139 @@ aplOrder = parsed.aplOrder,
             date = "SimC Simulation",
             isSimC = true,
         })
-        local dmgCount = 0
-        local dmgSample = ""
-        if parsed.damageData then
-            for _ in pairs(parsed.damageData) do dmgCount = dmgCount + 1 end
-            for name, d in pairs(parsed.damageData) do
-                dmgSample = dmgSample .. string.format(" %s=%.0f", name, d.total or 0)
-                if #dmgSample > 100 then break end
+        Addon.simcDialog:Hide()
+        print(string.format("|cff33ff33[DummyAnalyzer]|r Imported SimC reference: %s", label))
+    end
+
+    local function ShowSimCImportSummary(parsed, onConfirm)
+        local spellCount = 0
+        for _ in pairs(parsed.castCounts) do spellCount = spellCount + 1 end
+
+        local topLines = {}
+        local haveWeights = parsed.spellWeights and next(parsed.spellWeights)
+        local source = haveWeights and parsed.spellWeights or parsed.castCounts
+        for name, val in pairs(source) do
+            table.insert(topLines, {name = name, val = val})
+        end
+        table.sort(topLines, function(a, b) return a.val > b.val end)
+        for i = 6, #topLines do topLines[i] = nil end
+
+        local lines = {}
+        lines[#lines + 1] = string.format("Duration: %s",
+            (parsed.duration and parsed.duration > 0) and (parsed.duration .. " sec") or "unknown")
+        lines[#lines + 1] = string.format("Spells with cast counts: %d", spellCount)
+        lines[#lines + 1] = haveWeights and "Top 5 spells by weight (pDPS):" or "Top 5 spells by cast count:"
+        for _, t in ipairs(topLines) do
+            lines[#lines + 1] = string.format("   %s — %s", t.name,
+                haveWeights and Addon.FormatNumber(t.val) or tostring(t.val))
+        end
+        lines[#lines + 1] = string.format("APL order steps: %d", #(parsed.aplOrder or {}))
+        lines[#lines + 1] = (next(parsed.buffBenefit or {}) and "Buff benefit data: yes") or "Buff benefit data: no"
+
+        local frame = CreateStyledFrame("Frame", "DummyAnalyzerSimCSummary", UIParent)
+        frame:SetSize(400, 36 + 30 + (#lines * 22) + 53)
+        frame:SetPoint("CENTER")
+        frame:SetFrameStrata("DIALOG")
+        frame:SetMovable(true)
+        frame:SetClampedToScreen(true)
+        frame:EnableMouse(true)
+        frame:RegisterForDrag("LeftButton")
+        frame:SetScript("OnDragStart", frame.StartMoving)
+        frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+        ApplyBackdrop(frame, false)
+        trackDialog(frame)
+
+        local titleBar = CreateStyledFrame("Frame", nil, frame)
+        titleBar:SetPoint("TOPLEFT", frame, "TOPLEFT")
+        titleBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT")
+        titleBar:SetHeight(36)
+        titleBar:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
+        titleBar:SetBackdropColor(C.title[1], C.title[2], C.title[3], C.title[4])
+
+        local titleText = titleBar:CreateFontString(nil, "OVERLAY")
+        SafeSetFont(titleText, BOLD_FONT, 15)
+        titleText:SetPoint("CENTER")
+        titleText:SetText("Confirm SimC Import")
+        titleText:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], C.textHl[4])
+
+        local closeBtn = CreateStyledFrame("Button", nil, titleBar)
+        closeBtn:SetSize(28, 28)
+        closeBtn:SetPoint("RIGHT", titleBar, "RIGHT", -8, 0)
+        closeBtn:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
+        closeBtn:SetBackdropColor(C.btn[1], C.btn[2], C.btn[3], C.btn[4])
+        closeBtn:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], C.border[4])
+        local closeX = closeBtn:CreateFontString(nil, "OVERLAY")
+        SafeSetFont(closeX, BOLD_FONT, 16)
+        closeX:SetText("X")
+        closeX:SetPoint("CENTER")
+        closeX:SetTextColor(C.textMuted[1], C.textMuted[2], C.textMuted[3], C.textMuted[4])
+        closeBtn:SetScript("OnClick", function() frame:Hide() end)
+
+        local y = -50
+        for _, line in ipairs(lines) do
+            local fs = frame:CreateFontString(nil, "OVERLAY")
+            SafeSetFont(fs, MAIN_FONT, 12)
+            fs:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, y)
+            fs:SetText(line)
+            fs:SetTextColor(C.text[1], C.text[2], C.text[3], C.text[4])
+            y = y - 22
+        end
+
+        local bottomBar = CreateStyledFrame("Frame", nil, frame)
+        bottomBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT")
+        bottomBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT")
+        bottomBar:SetHeight(45)
+        bottomBar:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
+        bottomBar:SetBackdropColor(C.bg[1], C.bg[2], C.bg[3], C.bg[4])
+        bottomBar:SetFrameLevel(frame:GetFrameLevel() + 5)
+
+        local confirmBtn = CreateStyledButton(bottomBar, "Confirm Import", 130, 30, function()
+            frame:Hide()
+            onConfirm(parsed)
+        end, "primary")
+        confirmBtn:SetPoint("CENTER", bottomBar, "CENTER", -60, 0)
+        confirmBtn:SetFrameLevel(bottomBar:GetFrameLevel() + 2)
+
+        local cancelBtn = CreateStyledButton(bottomBar, "Cancel", 100, 30, function()
+            frame:Hide()
+        end)
+        cancelBtn:SetPoint("CENTER", bottomBar, "CENTER", 60, 0)
+        cancelBtn:SetFrameLevel(bottomBar:GetFrameLevel() + 2)
+
+        RegisterAddonWindow(frame)
+        frame:Show()
+    end
+
+    local function doImport()
+        local text = editBox:GetText() or ""
+        if Addon.debugMode then
+            print(string.format("|cff33ff33[DummyAnalyzer Debug]|r Import text: %d chars total", #text))
+            if #text > 0 then
+                print("|cff33ff33[DummyAnalyzer Debug]|r First 200 chars: " .. text:sub(1, 200))
+                print("|cff33ff33[DummyAnalyzer Debug]|r Last 200 chars: " .. text:sub(-200))
             end
         end
-        Addon.simcDialog:Hide()
-        print(string.format("|cff33ff33[DummyAnalyzer]|r Imported SimC reference: %s (%d dmg entries%s)", label, dmgCount, dmgCount > 0 and (":" .. dmgSample) or ""))
+        if not text or text == "" then
+            print("|cff33ff33[DummyAnalyzer]|r Paste SimC output first.")
+            return
+        end
+        local parsed = Addon.ParseSimC(text)
+        if not parsed then
+            statusText:SetTextColor(1.0, 0.4, 0.4, 1)
+            statusText:SetText("Could not parse SimC output. Make sure you pasted the full text from the Actions section onwards.")
+            print("|cff33ff33[DummyAnalyzer]|r Could not parse SimC output. Make sure you pasted the full text from the Actions section onwards.")
+            return
+        end
+        -- Filter SimC data to only include spells DummyAnalyzer can track
+        -- (removes procs, passives, auto-attacks that don't show in the combat log as casts)
+        parsed.castCounts, parsed.damageData = FilterSimCData(parsed.castCounts, parsed.damageData)
+        if not parsed.castCounts or not next(parsed.castCounts) then
+            statusText:SetTextColor(1.0, 0.4, 0.4, 1)
+            statusText:SetText("No usable spells found in that paste. Paste SimC text starting from the Actions section.")
+            print("|cff33ff33[DummyAnalyzer]|r SimC paste had no usable spells after filtering.")
+            return
+        end
+        ShowSimCImportSummary(parsed, applySimCImport)
     end
 
     local bottomBar = CreateStyledFrame("Frame", nil, Addon.simcDialog)
