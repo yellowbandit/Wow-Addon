@@ -15,33 +15,17 @@ local ScanPlayerTalents = Addon.ScanPlayerTalents
 local FilterSimCData = Addon.FilterSimCData
 local CAST_BUFF_DURATIONS_LOOKUP = Addon.CAST_BUFF_DURATIONS_LOOKUP
 
-Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, duration, buffGaps, seedSteps, priorHistory, selLogIds, customJitter, stepScale, requiredSpells)
-    if not castCounts or not next(castCounts) then
-        return "No cast data.", nil, "No cast data to analyze."
-    end
-
-    stepScale = stepScale or 1
+-- ============================================
+-- SHARED FITNESS CONTEXT
+-- ============================================
+-- Builds one immutable context table containing every piece of signal the
+-- fitness function needs, so EvaluateFitness can be called on ANY spell
+-- ordering (e.g. the interactive reorder panel) without re-running the
+-- randomized hill-climber. This is the exact same data the generator used
+-- to build inline; behavior is identical.
+local function BuildFitnessContext(castCounts, damageData, buffUptime, duration, buffGaps, requiredSpells, cfg)
     local playerGUID = UnitGUID("player") or "default"
-    local db = GetCharDB()
-    local cfg = db.settings or {}
-    local MAX_GENS = 500
-    local POP_SIZE = 1
-    local PLATEAU_THRESH = 0.0005
-    local PLATEAU_PATIENCE = 15
 
-    -- =====================================================
-    -- 1. LOAD HISTORICAL LOGS (DummyAnalyzerDB[playerGUID].logs)
-    -- =====================================================
-    local historicalLogs = {}
-    if DummyAnalyzerDB and DummyAnalyzerDB[playerGUID] and DummyAnalyzerDB[playerGUID].logs then
-        for _, logEntry in ipairs(DummyAnalyzerDB[playerGUID].logs) do
-            table.insert(historicalLogs, logEntry)
-        end
-    end
-
-    -- =====================================================
-    -- 2. LOAD STORED SIMC DATA BLOCK (DummyAnalyzerDB[playerGUID].simcData)
-    -- =====================================================
     local simcData = nil
     if DummyAnalyzerDB and DummyAnalyzerDB[playerGUID] and DummyAnalyzerDB[playerGUID].simcData then
         simcData = DummyAnalyzerDB[playerGUID].simcData
@@ -56,9 +40,6 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
     for i, n in ipairs(simcAplOrder) do aplPosition[n] = i end
     local aplMax = math.max(1, #simcAplOrder)
 
-    -- =====================================================
-    -- 3. NORMALIZE BUFF KEYS AND GAP DATA
-    -- =====================================================
     local buffByName = {}
     if buffUptime then
         for key, info in pairs(buffUptime) do
@@ -83,9 +64,6 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
         end
     end
 
-    -- =====================================================
-    -- 4. BUILD BASE ENTRIES FROM ACTUAL CAST DATA
-    -- =====================================================
     local totalActualDmg, totalActualCasts = 0, 0
     local baseEntries = {}
     for name, count in pairs(castCounts) do
@@ -166,19 +144,11 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
         baseEntries = kept
     end
 
-    if #baseEntries == 0 then
-        return "No castable spells found.", nil, "All spells filtered out."
-    end
+    if #baseEntries == 0 then return nil end
 
     local avgDmg = totalActualCasts > 0 and totalActualDmg / totalActualCasts or 1
 
-    -- =====================================================
-    -- 5. DEFICIT MATRIX
-    -- =====================================================
     -- DeficitValue = (ActualCastRatio / SimCCastRatio)
-    -- ActualCastRatio  = (actual_casts / total_actual_casts)
-    -- SimCCastRatio    = (simc_expected       / total_simc_casts)
-    -- deficit < 1 means under-cast relative to SimC, > 1 means over-cast
     local totalSimcCasts = 0
     for _, c in pairs(simcCasts) do totalSimcCasts = totalSimcCasts + c end
     local simcMult = (duration and duration > 0 and simcDuration > 0) and (duration / simcDuration) or 1
@@ -209,21 +179,174 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
         end
     end
 
-    -- =====================================================
-    -- 6. HELPER: LONG-CD DETECTION (long-CD spells never duplicated)
-    -- =====================================================
     local function isLongCD(name)
         local simcExp = math.floor((simcCasts[name] or 0) * simcMult)
         return simcExp > 0 and simcDuration > 0 and (simcExp / simcDuration * 60) < 2
     end
 
-    -- =====================================================
-    -- 7. SIMC pDPS WEIGHT NORMALIZATION
-    -- =====================================================
     local maxSimcWeight = 0
     for _, w in pairs(simcWeights) do
         if w > maxSimcWeight then maxSimcWeight = w end
     end
+
+    return {
+        baseEntries     = baseEntries,
+        avgDmg          = avgDmg,
+        deficitMat      = deficitMat,
+        actualRatios    = actualRatios,
+        simcRatios      = simcRatios,
+        simcCasts       = simcCasts,
+        simcWeights     = simcWeights,
+        simcAplOrder    = simcAplOrder,
+        simcBuffBenefit = simcBuffBenefit,
+        simcDuration    = simcDuration,
+        simcData        = simcData,
+        aplPosition     = aplPosition,
+        aplMax          = aplMax,
+        buffByName      = buffByName,
+        buffMaxGap      = buffMaxGap,
+        simcMult        = simcMult,
+        totalSimcCasts  = totalSimcCasts,
+        maxSimcWeight   = maxSimcWeight,
+        totalActualCasts = totalActualCasts,
+        totalActualDmg  = totalActualDmg,
+        reqSet          = reqSet,
+        neverSet        = neverSet,
+        isLongCD        = isLongCD,
+        duration        = duration,
+    }
+end
+
+-- The re-entrant fitness evaluator. Same formula as the generator's old
+-- inline closure, but reads everything from `ctx` so ANY ordering can be
+-- scored without re-running the randomized search.
+local function EvaluateFitness(stepArr, ctx)
+    local stepCounts = {}
+    for _, name in ipairs(stepArr) do
+        stepCounts[name] = (stepCounts[name] or 0) + 1
+    end
+
+    local theoDps = 0
+    local reward  = 0
+    local penalty = 0
+
+    for _, e in ipairs(ctx.baseEntries) do
+        local sc = stepCounts[e.name] or 0
+        theoDps = theoDps + sc * e.dpc
+
+        -- SimC pDPS weight alignment reward
+        if ctx.maxSimcWeight > 0 and ctx.simcWeights[e.name] then
+            local wRatio = ctx.simcWeights[e.name] / ctx.maxSimcWeight
+            local scRatio = (ctx.totalActualCasts > 0) and (e.count / ctx.totalActualCasts) or 0
+            reward = reward + wRatio * scRatio * 1000 * (1 - math.abs(scRatio - wRatio))
+        end
+
+        -- APL position reward: early APL spells get positional bonus
+        local aplPos = ctx.aplPosition[e.name]
+        if aplPos then
+            local posBonus = (1 - (aplPos - 1) / ctx.aplMax) * 0.1
+            reward = reward + posBonus * sc * ctx.avgDmg
+        end
+
+        -- Mandatory uptime buff penalty: buff shuffled too low or absent
+        local upInfo = ctx.buffByName[e.name]
+        if upInfo and upInfo.uptime > (ctx.duration or 120) * 0.1 then
+            local firstPos = 0
+            for pi, nm in ipairs(stepArr) do
+                if nm == e.name then firstPos = pi; break end
+            end
+            local pctUp = upInfo.uptime / (ctx.duration or 120)
+            if firstPos == 0 then
+                penalty = penalty + pctUp * ctx.avgDmg * 8
+            elseif firstPos > math.ceil(#stepArr * 0.6) then
+                penalty = penalty + pctUp * ctx.avgDmg * 4
+            end
+            -- Known duration gap unaddressed
+            local mg = ctx.buffMaxGap[e.name] or 0
+            if mg >= 12 then
+                penalty = penalty + mg * 10
+            elseif mg >= 8 then
+                penalty = penalty + mg * 5
+            end
+        end
+
+        -- Heavy penalty for missing SimC-critical spells
+        local simcExp = math.floor((ctx.simcCasts[e.name] or 0) * ctx.simcMult)
+        if simcExp > 3 and sc == 0 then
+            penalty = penalty + simcExp * 2.0
+        elseif simcExp > 0 and sc < simcExp * 0.4 then
+            penalty = penalty + (simcExp - sc) * 1.5
+        end
+    end
+
+    -- Over-cast penalty: too many copies wastes priority slots
+    for name, sc in pairs(stepCounts) do
+        local simcExp = math.floor((ctx.simcCasts[name] or 0) * ctx.simcMult)
+        if simcExp > 0 and sc > simcExp * 1.8 then
+            penalty = penalty + (sc - simcExp * 1.8) * 0.5
+        end
+    end
+
+    return theoDps + reward - penalty
+end
+
+Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, duration, buffGaps, seedSteps, priorHistory, selLogIds, customJitter, stepScale, requiredSpells)
+    if not castCounts or not next(castCounts) then
+        return "No cast data.", nil, "No cast data to analyze."
+    end
+
+    stepScale = stepScale or 1
+    local playerGUID = UnitGUID("player") or "default"
+    local db = GetCharDB()
+    local cfg = db.settings or {}
+    local MAX_GENS = 500
+    local POP_SIZE = 1
+    local PLATEAU_THRESH = 0.0005
+    local PLATEAU_PATIENCE = 15
+
+    -- =====================================================
+    -- 1. LOAD HISTORICAL LOGS (DummyAnalyzerDB[playerGUID].logs)
+    -- =====================================================
+    local historicalLogs = {}
+    if DummyAnalyzerDB and DummyAnalyzerDB[playerGUID] and DummyAnalyzerDB[playerGUID].logs then
+        for _, logEntry in ipairs(DummyAnalyzerDB[playerGUID].logs) do
+            table.insert(historicalLogs, logEntry)
+        end
+    end
+
+    -- =====================================================
+    -- 2-9. FITNESS CONTEXT (hoisted to shared builder)
+    -- =====================================================
+    local ctx = BuildFitnessContext(castCounts, damageData, buffUptime, duration, buffGaps, requiredSpells, cfg)
+    if not ctx then
+        return "No castable spells found.", nil, "All spells filtered out."
+    end
+    local simcData = ctx.simcData
+    local simcCasts = ctx.simcCasts
+    local simcWeights = ctx.simcWeights
+    local simcAplOrder = ctx.simcAplOrder
+    local simcBuffBenefit = ctx.simcBuffBenefit
+    local simcDuration = ctx.simcDuration
+    local aplPosition = ctx.aplPosition
+    local aplMax = ctx.aplMax
+
+    local buffByName = ctx.buffByName
+    local buffMaxGap = ctx.buffMaxGap
+
+    local baseEntries = ctx.baseEntries
+    local reqSet = ctx.reqSet
+    local neverSet = ctx.neverSet
+    local avgDmg = ctx.avgDmg
+    local totalActualDmg = ctx.totalActualDmg
+    local totalActualCasts = ctx.totalActualCasts
+
+    local totalSimcCasts = ctx.totalSimcCasts
+    local simcMult = ctx.simcMult
+    local deficitMat  = ctx.deficitMat
+    local actualRatios = ctx.actualRatios
+    local simcRatios  = ctx.simcRatios
+    local isLongCD = ctx.isLongCD
+    local maxSimcWeight = ctx.maxSimcWeight
 
     -- =====================================================
     -- 8. HISTORY BONUS (top-3 prior optimizer runs)
@@ -243,78 +366,7 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
         end
     end
 
-    -- =====================================================
-    -- 9. FITNESS EVALUATION
-    -- =====================================================
-    local function EvaluateFitness(stepArr)
-        local stepCounts = {}
-        for _, name in ipairs(stepArr) do
-            stepCounts[name] = (stepCounts[name] or 0) + 1
-        end
-
-        local theoDps = 0
-        local reward  = 0
-        local penalty = 0
-
-        for _, e in ipairs(baseEntries) do
-            local sc = stepCounts[e.name] or 0
-            theoDps = theoDps + sc * e.dpc
-
-            -- SimC pDPS weight alignment reward
-            if maxSimcWeight > 0 and simcWeights[e.name] then
-                local wRatio = simcWeights[e.name] / maxSimcWeight
-                local scRatio = (totalActualCasts > 0) and (e.count / totalActualCasts) or 0
-                reward = reward + wRatio * scRatio * 1000 * (1 - math.abs(scRatio - wRatio))
-            end
-
-            -- APL position reward: early APL spells get positional bonus
-            local aplPos = aplPosition[e.name]
-            if aplPos then
-                local posBonus = (1 - (aplPos - 1) / aplMax) * 0.1
-                reward = reward + posBonus * sc * avgDmg
-            end
-
-            -- Mandatory uptime buff penalty: buff shuffled too low or absent
-            local upInfo = buffByName[e.name]
-            if upInfo and upInfo.uptime > (duration or 120) * 0.1 then
-                local firstPos = 0
-                for pi, nm in ipairs(stepArr) do
-                    if nm == e.name then firstPos = pi; break end
-                end
-                local pctUp = upInfo.uptime / (duration or 120)
-                if firstPos == 0 then
-                    penalty = penalty + pctUp * avgDmg * 8
-                elseif firstPos > math.ceil(#stepArr * 0.6) then
-                    penalty = penalty + pctUp * avgDmg * 4
-                end
-                -- Known duration gap unaddressed
-                local mg = buffMaxGap[e.name] or 0
-                if mg >= 12 then
-                    penalty = penalty + mg * 10
-                elseif mg >= 8 then
-                    penalty = penalty + mg * 5
-                end
-            end
-
-            -- Heavy penalty for missing SimC-critical spells
-            local simcExp = math.floor((simcCasts[e.name] or 0) * simcMult)
-            if simcExp > 3 and sc == 0 then
-                penalty = penalty + simcExp * 2.0
-            elseif simcExp > 0 and sc < simcExp * 0.4 then
-                penalty = penalty + (simcExp - sc) * 1.5
-            end
-        end
-
-        -- Over-cast penalty: too many copies wastes priority slots
-        for name, sc in pairs(stepCounts) do
-            local simcExp = math.floor((simcCasts[name] or 0) * simcMult)
-            if simcExp > 0 and sc > simcExp * 1.8 then
-                penalty = penalty + (sc - simcExp * 1.8) * 0.5
-            end
-        end
-
-        return theoDps + reward - penalty
-    end
+    
 
     -- =====================================================
     -- 10. MUTATION OPERATORS
@@ -420,7 +472,7 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
     -- 12. HILL-CLIMBING MAIN LOOP (500 generations)
     -- =====================================================
     local current = BuildInitialSequence()
-    local currentFitness = EvaluateFitness(current)
+    local currentFitness = EvaluateFitness(current, ctx)
 
     local bestSequence = {unpack(current)}
     local bestFitness = currentFitness
@@ -457,7 +509,7 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
 
         -- Evaluate all variants, keep best
         for _, variant in ipairs(variants) do
-            local vf = EvaluateFitness(variant)
+            local vf = EvaluateFitness(variant, ctx)
             if vf > currentFitness then
                 current = variant
                 currentFitness = vf
@@ -483,7 +535,7 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
         if plateauCount >= PLATEAU_PATIENCE then
             -- Restart from fresh seed to escape local optimum
             current = BuildInitialSequence()
-            currentFitness = EvaluateFitness(current)
+            currentFitness = EvaluateFitness(current, ctx)
             plateauCount = 0
         end
     end
@@ -735,6 +787,27 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
 
     DebugLog("info", "suggest-seq", string.format("Returning seq=%s, bestFitness=%.2f, unique=%d steps=%d", seqText and (#seqText > 0 and "OK" or "empty") or "nil", bestFitness or 0, #uniqueOrder, #finalSteps))
     return seqText, importStr, reasoningText, bestFitness
+end
+
+-- ============================================
+-- RE-ENTRANT ORDER EVALUATOR (interactive panel)
+-- ============================================
+-- Scores an arbitrary spell ordering without re-running the randomized
+-- hill-climber. Deterministic: same order always returns the same score.
+Addon.EvaluateSequenceOrder = function(orderedSteps, castCounts, damageData, buffUptime, duration, buffGaps)
+    if not orderedSteps or #orderedSteps == 0 then
+        return nil, "No steps to evaluate."
+    end
+    if not castCounts or not next(castCounts) then
+        return nil, "No cast data."
+    end
+    local db  = GetCharDB()
+    local cfg = db.settings or {}
+    local ctx = BuildFitnessContext(castCounts, damageData, buffUptime, duration, buffGaps, cfg.requiredSpells, cfg)
+    if not ctx then
+        return nil, "No castable spells found."
+    end
+    return EvaluateFitness(orderedSteps, ctx), nil
 end
 
 -- ============================================

@@ -701,7 +701,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
     exportDialog = CreateStyledFrame("Frame", nil, UIParent); trackDialog(exportDialog)
     exportDialogRef = exportDialog
     local addSlotBtn
-    exportDialog:SetSize(680, 600)
+    exportDialog:SetSize(780, 600)
     exportDialog:SetPoint("CENTER")
     exportDialog:SetMovable(true)
     exportDialog:SetClampedToScreen(true)
@@ -1343,6 +1343,17 @@ local pushBtn = CreateStyledButton(bottomRow, "Push to GRIP-EMS", 170, 32, funct
     end)
     readBtn:SetPoint("LEFT", cfgBtn, "RIGHT", 10, 0)
 
+    local reorderBtn = CreateStyledButton(bottomRow, "Reorder", 90, 32, function()
+        Addon.OpenReorderPanel(castCounts, damageData, buffUptime, playerDuration, buffGaps, editBox:GetText() or "", function(newText)
+            seqText = newText
+            local macros2, ord2 = ParseSequenceLines(newText)
+            local deficit = ComputeDeficitSnapshot(castCounts, GetCharDB().simcData, playerDuration)
+            SetEditText(GetSimcWarning() .. BuildKidFriendlyDisplay("best", { logLabel = "Reorder", id = nil }, Addon.bestSequence.score or 0, playerDuration or 1, macros2, ord2, deficit))
+            ClearHighlights()
+        end)
+    end)
+    reorderBtn:SetPoint("LEFT", readBtn, "RIGHT", 10, 0)
+
     local closeBtn2 = CreateStyledButton(bottomRow, "Close", 100, 32, function() exportDialog:Hide() end, "danger")
     closeBtn2:SetPoint("RIGHT", bottomRow, "RIGHT", 0, 0)
 
@@ -1415,6 +1426,175 @@ local pushBtn = CreateStyledButton(bottomRow, "Push to GRIP-EMS", 170, 32, funct
 
     RegisterAddonWindow(exportDialog)
     exportDialog:Show()
+end
+
+Addon.OpenReorderPanel = function(castCounts, damageData, buffUptime, playerDuration, buffGaps, currentText, onAccept)
+    local bs = Addon.bestSequence or {}
+    local startedOrder = {}
+    if bs.orderedSpellNames and #bs.orderedSpellNames > 0 then
+        for _, n in ipairs(bs.orderedSpellNames) do startedOrder[#startedOrder + 1] = n end
+    else
+        local _, ord = ParseSequenceLines(currentText or bs.seqText or "")
+        startedOrder = ord or {}
+    end
+    if #startedOrder == 0 then
+        DebugLog("warn", "reorder", "No ordered spells to reorder")
+        return
+    end
+    local workingOrder = {}
+    for _, n in ipairs(startedOrder) do workingOrder[#workingOrder + 1] = n end
+
+    local function ScoreOrder(order)
+        local raw = Addon.EvaluateSequenceOrder(order, castCounts, damageData, buffUptime, playerDuration, buffGaps)
+        raw = raw or 0
+        local db = GetCharDB()
+        local guid = UnitGUID("player") or "default"
+        local simcApl = (db and db[guid] and db[guid].simcData and db[guid].simcData.aplOrder) or {}
+        local align = 0
+        if #simcApl > 0 then
+            local aplPos = {}
+            for i, n in ipairs(simcApl) do aplPos[n] = i end
+            for i, n in ipairs(order) do
+                local p = aplPos[n]
+                if p then align = align + math.max(0, 1 - math.abs(i - p) / #order) end
+            end
+            align = align * 10
+        end
+        DebugLog("debug", "reorder", string.format("ScoreOrder n=%d simcApl=%d raw=%.2f align=%.2f total=%.2f", #order, #simcApl, raw, align, raw + align))
+        return raw + align
+    end
+    local scoreAtOpen = ScoreOrder(startedOrder)
+    local currentScore = scoreAtOpen
+
+    if Addon.reorderPanelRef then Addon.reorderPanelRef:Hide(); Addon.reorderPanelRef = nil end
+    local panel = CreateStyledFrame("Frame", nil, UIParent)
+    Addon.reorderPanelRef = panel
+    panel:SetSize(480, 420)
+    panel:SetPoint("CENTER")
+    ApplyBackdrop(panel, false)
+    panel:SetMovable(true); panel:SetClampedToScreen(true); panel:EnableMouse(true); panel:RegisterForDrag("LeftButton")
+    panel:SetScript("OnDragStart", panel.StartMoving); panel:SetScript("OnDragStop", panel.StopMovingOrSizing)
+
+    local titleBar = CreateStyledFrame("Frame", nil, panel)
+    titleBar:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, 0)
+    titleBar:SetPoint("TOPRIGHT", panel, "TOPRIGHT", 0, 0)
+    titleBar:SetHeight(30)
+    ApplyBackdrop(titleBar, false)
+    titleBar:SetBackdropColor(C.title[1], C.title[2], C.title[3], C.title[4])
+    local titleText = titleBar:CreateFontString(nil, "OVERLAY")
+    SafeSetFont(titleText, BOLD_FONT, 14)
+    titleText:SetText("Reorder Sequence")
+    titleText:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], 1)
+    titleText:SetPoint("CENTER")
+    local closeX = CreateStyledButton(titleBar, "X", 24, 24, function() panel:Hide() end, "danger")
+    closeX:SetPoint("RIGHT", titleBar, "RIGHT", -6, 0)
+
+    local sLine = panel:CreateFontString(nil, "OVERLAY")
+    SafeSetFont(sLine, BOLD_FONT, 13)
+    sLine:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 12, 44)
+
+    local function rescore()
+        currentScore = ScoreOrder(workingOrder)
+        local delta = currentScore - scoreAtOpen
+        DebugLog("debug", "reorder", string.format("score=%.2f delta=%+.2f order=%s", currentScore, delta, table.concat(workingOrder, "|")))
+        sLine:SetText(string.format("Score: %.1f    Δ %+.1f", currentScore, delta))
+        if delta >= 0 then sLine:SetTextColor(0.2, 0.9, 0.3, 1)
+        else sLine:SetTextColor(0.95, 0.25, 0.25, 1) end
+    end
+
+    local scrollFrame = CreateFrame("ScrollFrame", nil, panel, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT", panel, "TOPLEFT", 12, -38)
+    scrollFrame:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -12, -52)
+    local container = CreateFrame("Frame", nil, scrollFrame)
+    container:SetWidth(456)
+    scrollFrame:SetScrollChild(container)
+
+    local rows = {}
+    local function GetRow(i)
+        local row = rows[i]
+        if not row then
+            row = CreateStyledFrame("Frame", nil, container)
+            row:SetSize(456, 26)
+            ApplyBackdrop(row, false)
+            row.rank = row:CreateFontString(nil, "OVERLAY")
+            SafeSetFont(row.rank, FONT, 13)
+            row.rank:SetPoint("LEFT", row, "LEFT", 8, 0)
+            row.lbl = row:CreateFontString(nil, "OVERLAY")
+            SafeSetFont(row.lbl, FONT, 13)
+            row.lbl:SetPoint("LEFT", row, "LEFT", 48, 0)
+            row.lbl:SetWidth(320)
+            row.lbl:SetJustifyH("LEFT")
+            row.lbl:SetTextColor(C.textHl[1], C.textHl[2], C.textHl[3], 1)
+            row.up = CreateStyledButton(row, "^", 30, 22, nil, "primary")
+            row.up:SetPoint("RIGHT", row, "RIGHT", -62, 0)
+            row.dn = CreateStyledButton(row, "v", 30, 22, nil, "primary")
+            row.dn:SetPoint("RIGHT", row, "RIGHT", -30, 0)
+            rows[i] = row
+        end
+        return row
+    end
+
+    local function render()
+        container:SetHeight(math.max(30, #workingOrder * 26))
+        for i, name in ipairs(workingOrder) do
+            local row = GetRow(i)
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -((i - 1) * 26))
+            if i % 2 == 1 then row:SetBackdropColor(0.08, 0.08, 0.08, 1)
+            else row:SetBackdropColor(0.03, 0.03, 0.03, 1) end
+            row.rank:SetText(string.format("%2d.", i))
+            row.lbl:SetText(name)
+            row.up:SetEnabled(i > 1)
+            row.dn:SetEnabled(i < #workingOrder)
+            row.up:SetScript("OnClick", function()
+                if i <= 1 then return end
+                workingOrder[i], workingOrder[i - 1] = workingOrder[i - 1], workingOrder[i]
+                render(); rescore()
+            end)
+            row.dn:SetScript("OnClick", function()
+                if i >= #workingOrder then return end
+                workingOrder[i], workingOrder[i + 1] = workingOrder[i + 1], workingOrder[i]
+                render(); rescore()
+            end)
+            row:Show()
+        end
+        for i = #workingOrder + 1, #rows do rows[i]:Hide() end
+    end
+
+    local revBtn = CreateStyledButton(panel, "Revert", 90, 30, function()
+        workingOrder = {}
+        for _, n in ipairs(startedOrder) do workingOrder[#workingOrder + 1] = n end
+        render(); rescore()
+    end)
+    revBtn:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 12, 8)
+    local canBtn = CreateStyledButton(panel, "Cancel", 90, 30, function() panel:Hide() end)
+    canBtn:SetPoint("LEFT", revBtn, "RIGHT", 10, 0)
+    local accBtn = CreateStyledButton(panel, "Accept", 120, 30, function()
+        local counts = {}
+        if bs.fullSteps then
+            for _, n in ipairs(bs.fullSteps) do counts[n] = (counts[n] or 0) + 1 end
+        end
+        local newFull = {}
+        for _, n in ipairs(workingOrder) do
+            local c = counts[n] or 1
+            for _ = 1, c do newFull[#newFull + 1] = n end
+        end
+        local lines = {}
+        for _, n in ipairs(newFull) do lines[#lines + 1] = (GetActionPrefix(n) or "/cast") .. " [combat] " .. n end
+        bs.orderedSpellNames = {}
+        for _, n in ipairs(workingOrder) do bs.orderedSpellNames[#bs.orderedSpellNames + 1] = n end
+        bs.fullSteps = newFull
+        bs.score = currentScore
+        bs.normScore = currentScore / math.max(playerDuration or 1, 1)
+        bs.seqText = table.concat(lines, "\n")
+        if onAccept then onAccept(bs.seqText) end
+        panel:Hide()
+    end, "primary")
+    accBtn:SetPoint("LEFT", canBtn, "RIGHT", 10, 0)
+
+    render()
+    rescore()
+    panel:Show()
 end
 
 -- ============================================
