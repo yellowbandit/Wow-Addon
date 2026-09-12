@@ -901,8 +901,8 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         do -- auto-push: push the CURRENTLY-DISPLAYED steps (fresh seqText-derived),
             -- never a stale persisted bestSequence fullSteps cache.
             local s = (GetCharDB()).settings or {}
-            if s.autoPush and #fullStepNames > 0 then
-                C_Timer.After(0.5, function() Ems_PushBestSequence(fullStepNames) end)
+            if s.autoPush and ordNames and #ordNames > 0 then
+                C_Timer.After(0.5, function() Ems_PushBestSequence(ordNames) end)
             end
         end
         local persistDb = GetCharDB()
@@ -1039,8 +1039,8 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
             Addon.lastInterleaveMap = bestSeqMap
             do -- auto-push
                 local s = (GetCharDB()).settings or {}
-                if s.autoPush and fullStepNames and #fullStepNames > 0 then
-                    C_Timer.After(0.5, function() Ems_PushBestSequence(fullStepNames) end)
+                if s.autoPush and ordered and #ordered > 0 then
+                    C_Timer.After(0.5, function() Ems_PushBestSequence(ordered) end)
                 end
             end
             local db3 = GetCharDB()
@@ -1190,14 +1190,27 @@ end
 local pushBtn = CreateStyledButton(bottomRow, "Push to GRIP-EMS", 170, 32, function()
           print("|cff33ff33[DummyAnalyzer EMS]|r Push to GRIP-EMS clicked. Resolving order...")
           local steps = nil
-          -- Ponytail: use current seqText first (always matches what's displayed),
-          -- fall back to saved bestSequence.fullSteps, then raw editBox text.
+          -- Push must feed the BASE unique spell order, not the expanded duplicate list:
+          -- Ems_BuildSequenceData rebuilds the flat interval-tagged actions from the base
+          -- order + stored interleave map, so what GRIP-EMS receives (and weaves) matches
+          -- the preview. ParseSequenceLines returns (macros, ordered) where ordered is the
+          -- base first-appearance order; fall back to saved orderedSpellNames, then the old
+          -- fullSteps path, then raw editBox text (manual mode keeps verbatim input).
           if seqText and seqText ~= "" then
-              steps = ExtractAllSteps(seqText)
-              print("|cffffff00[DummyAnalyzer EMS]|r From seqText, len=" .. #steps)
+              local _, baseOrder = ParseSequenceLines(seqText)
+              if baseOrder and #baseOrder > 0 then
+                  steps = baseOrder
+                  print("|cffffff00[DummyAnalyzer EMS]|r From seqText base order, len=" .. #steps)
+              else
+                  steps = ExtractAllSteps(seqText)
+                  print("|cffffff00[DummyAnalyzer EMS]|r From seqText, len=" .. #steps)
+              end
           else
               local db2 = GetCharDB()
-              if db2 and db2.bestSequence and type(db2.bestSequence.fullSteps) == "table" and #db2.bestSequence.fullSteps > 0 then
+              if db2 and db2.bestSequence and type(db2.bestSequence.orderedSpellNames) == "table" and #db2.bestSequence.orderedSpellNames > 0 then
+                  steps = db2.bestSequence.orderedSpellNames
+                  print("|cffffff00[DummyAnalyzer EMS]|r Cache fallback: orderedSpellNames len=" .. #steps)
+              elseif db2 and db2.bestSequence and type(db2.bestSequence.fullSteps) == "table" and #db2.bestSequence.fullSteps > 0 then
                   steps = db2.bestSequence.fullSteps
                   print("|cffffff00[DummyAnalyzer EMS]|r Cache fallback: fullSteps len=" .. #steps)
               elseif editBox then
