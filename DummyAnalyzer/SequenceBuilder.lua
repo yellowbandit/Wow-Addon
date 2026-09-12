@@ -109,6 +109,58 @@ local function BuildActionsFromFlat(orderedSpellNames, intervalMap)
     return actions
 end
 
+-- Pure expansion of a base spell order + interleave map into the flat cast list that
+-- GRIP-EMS weaves at runtime. Mirrors GRIP-EMS ActionCompiler._applyInterleaving: each
+-- interleaved spell gains a copy AFTER every Nth original base step (k = interval,
+-- 2*interval, ... <= #base). Buckets are keyed by ORIGINAL base index so stacked
+-- intervals never drift each other. Uses only the intervalMap semantics, never spell
+-- counts. Display-only: the pushed sequence stays the unexpanded flat list produced by
+-- BuildActionsFromFlat, which GRIP-EMS expands identically, so the preview always
+-- matches what Push to GRIP-EMS builds.
+-- @param baseOrdered array of spell names in base order (normalized internally)
+-- @param intervalMap table spell name -> interval (clamped 1..50, non-positive ignored)
+-- @param maxCasts number|nil maximum casts to return (defaults PREVIEW_MAX_CASTS)
+-- @return table { steps = {name,...}, truncated = boolean }
+local PREVIEW_MAX_CASTS = 20
+Addon.ExpandSequenceForPreview = function(baseOrdered, intervalMap, maxCasts)
+    maxCasts = maxCasts or PREVIEW_MAX_CASTS
+    local base = {}
+    for _, s in ipairs(baseOrdered or {}) do
+        local norm = NormalizeSpellName(s)
+        if norm ~= "" then base[#base + 1] = norm end
+    end
+    local originalCount = #base
+    if originalCount == 0 then return { steps = {}, truncated = false } end
+    local insertAfter = {}
+    local totalInserted = 0
+    for _, name in ipairs(base) do
+        local iv = type(intervalMap) == "table" and intervalMap[name] or nil
+        if iv and iv > 0 then
+            local interval = math.max(1, math.min(50, NumberOrZero(iv)))
+            local k = interval
+            while k <= originalCount and totalInserted < 200 do
+                local bucket = insertAfter[k]
+                if not bucket then bucket = {}; insertAfter[k] = bucket end
+                bucket[#bucket + 1] = name
+                totalInserted = totalInserted + 1
+                k = k + interval
+            end
+        end
+    end
+    local steps = {}
+    local truncated = false
+    for k = 1, originalCount do
+        if #steps < maxCasts then steps[#steps + 1] = base[k] else truncated = true end
+        local bucket = insertAfter[k]
+        if bucket then
+            for _, name in ipairs(bucket) do
+                if #steps < maxCasts then steps[#steps + 1] = name else truncated = true end
+            end
+        end
+    end
+    return { steps = steps, truncated = truncated }
+end
+
 local function BuildActionsFromStructure(structure)
     local actions = {}
     local function appendNode(node, depth)
