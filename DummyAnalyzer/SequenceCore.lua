@@ -387,7 +387,7 @@ Addon.GenerateEMSSequence = function(castCounts, damageData, ensureSpells, buffU
     end
     local result = table.concat(lines, "\n")
     DebugLog("info", "gen-seq", string.format("Returning %d steps, #filtered=%d", #finalSteps, #filtered), { topName = sorted[1] and sorted[1].name })
-    return result
+    return result, interleaveCandidates
 end
 
 -- ============================================

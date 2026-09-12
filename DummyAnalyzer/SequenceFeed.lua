@@ -880,7 +880,8 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
     if suggestMode then
         local autoReqSpells = CollectRequiredSpells()
         local rawSeqText
-        rawSeqText, importStr, reasoningText, seqScore = GenerateSuggestedSequence(castCounts, damageData, buffUptime, playerDuration, buffGaps, nil, nil, selectedLogIds, nil, nil, autoReqSpells)
+        local seqInterleave
+        rawSeqText, importStr, reasoningText, seqScore, seqInterleave = GenerateSuggestedSequence(castCounts, damageData, buffUptime, playerDuration, buffGaps, nil, nil, selectedLogIds, nil, nil, autoReqSpells)
         if not rawSeqText then return end
         seqScore = seqScore or 0
         local macros, ordNames = ParseSequenceLines(rawSeqText)
@@ -894,7 +895,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         if not Addon.bestSequence then Addon.bestSequence = {score = 0, normScore = 0} end
         if not Addon.bestSequence.normScore then Addon.bestSequence.normScore = 0 end
         if normScore > (Addon.bestSequence.normScore or 0) then
-            Addon.bestSequence = {score = seqScore, normScore = normScore, seqText = seqText, importStr = importStr, reasoningText = reasoningText, orderedSpellNames = ordNames, fullSteps = fullStepNames}
+            Addon.bestSequence = {score = seqScore, normScore = normScore, seqText = seqText, importStr = importStr, reasoningText = reasoningText, orderedSpellNames = ordNames, fullSteps = fullStepNames, interleaveMap = seqInterleave}
         end
         do -- auto-push: push the CURRENTLY-DISPLAYED steps (fresh seqText-derived),
             -- never a stale persisted bestSequence fullSteps cache.
@@ -997,8 +998,13 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         DebugLog("info", "BestSeq", string.format("%d logs total, best DPS log: %s", logCount, tostring(bestLog.id)))
         local reqSpells = CollectRequiredSpells()
         -- Prefer the sequence stored with the best log; fall back to a deterministic rebuild from its casts.
-        local bestSeqStr = (bestLog.emsSeqText and bestLog.emsSeqText ~= "") and bestLog.emsSeqText
-            or GenerateEMSSequence(bestLog.castCounts, bestLog.damageData or {}, reqSpells, bestLog.buffUptime)
+        local bestSeqStr
+        local bestSeqMap
+        if bestLog.emsSeqText and bestLog.emsSeqText ~= "" then
+            bestSeqStr = bestLog.emsSeqText
+        else
+            bestSeqStr, bestSeqMap = GenerateEMSSequence(bestLog.castCounts, bestLog.damageData or {}, reqSpells, bestLog.buffUptime)
+        end
         if bestSeqStr and bestSeqStr ~= "" then
             local macros, ordered = ParseSequenceLines(bestSeqStr)
             local bestScore = bestDPS * math.max(bestLog.duration or 1, 1)
@@ -1027,7 +1033,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
                 if ok and type(s) == "string" then bestImportStr = s end
             end
             local bestReasonStr = "Best DPS run from training logs."
-            Addon.bestSequence = {score = bestScore or 0, normScore = (bestScore or 0) / math.max(bestLog.duration or 1, 1), seqText = table.concat(macros, "\n"), importStr = bestImportStr, reasoningText = bestReasonStr, orderedSpellNames = ordered, fullSteps = fullStepNames}
+            Addon.bestSequence = {score = bestScore or 0, normScore = (bestScore or 0) / math.max(bestLog.duration or 1, 1), seqText = table.concat(macros, "\n"), importStr = bestImportStr, reasoningText = bestReasonStr, orderedSpellNames = ordered, fullSteps = fullStepNames, interleaveMap = bestSeqMap}
             do -- auto-push
                 local s = (GetCharDB()).settings or {}
                 if s.autoPush and fullStepNames and #fullStepNames > 0 then
@@ -1057,7 +1063,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         end
         local simcCastCounts = db.simcData.castCounts
         local simcDamage = db.simcData.damageData or {}
-        local simcSeqText = GenerateEMSSequence(simcCastCounts, simcDamage)
+        local simcSeqText, simcSeqMap = GenerateEMSSequence(simcCastCounts, simcDamage)
         local castCount = 0; for _ in pairs(simcCastCounts) do castCount = castCount + 1 end
         DebugLog("info", "simc-gen", string.format("SimC import generated seq: %s (%d spells in castCounts)", simcSeqText and #simcSeqText > 0 and "OK" or "empty", castCount))
         if not simcSeqText or simcSeqText == "" then
@@ -1075,7 +1081,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         seqText = simcSeqText
         importStr = simcImportStr
         reasoningText = "Generated from SimC import (no real logs)."
-        Addon.bestSequence = { score = 0, normScore = 0, seqText = seqText, importStr = importStr, reasoningText = reasoningText, orderedSpellNames = ordered, fullSteps = fullStepNames }
+        Addon.bestSequence = { score = 0, normScore = 0, seqText = seqText, importStr = importStr, reasoningText = reasoningText, orderedSpellNames = ordered, fullSteps = fullStepNames, interleaveMap = simcSeqMap }
         local persistDb = GetCharDB()
         persistDb.bestSequence = Addon.bestSequence
         HighlightTab(simcBtn)
@@ -1102,7 +1108,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         DebugLog("info", "next-seq", string.format("Parsed %d steps from seqText, castCounts keys=%d", #steps, ccCount))
         if #steps == 0 then steps = nil end
         local reqSpells = CollectRequiredSpells()
-        local ok, nSeq, nImp, nReason, nScore = pcall(GenerateSuggestedSequence, castCounts, damageData, buffUptime, playerDuration, buffGaps, steps, db5.optimizerHistory, nil, nil, nil, reqSpells)
+        local ok, nSeq, nImp, nReason, nScore, nMap = pcall(GenerateSuggestedSequence, castCounts, damageData, buffUptime, playerDuration, buffGaps, steps, db5.optimizerHistory, nil, nil, nil, reqSpells)
         if not ok then
             DebugLog("error", "next-seq", "pcall failed: " .. tostring(nSeq))
             print("|cffff4444[DummyAnalyzer]|r Next Sequence error: " .. tostring(nSeq))
@@ -1134,7 +1140,7 @@ HighlightTab(nextBtn)
                     local sn = ExtractSpellFromSeqLine(m)
                     if sn and sn ~= "" then fullStepNames[#fullStepNames + 1] = sn end
                 end
-                Addon.bestSequence = {score = nScore or 0, normScore = normS, seqText = table.concat(macros, "\n"), importStr = nImp, reasoningText = nReason, orderedSpellNames = ordered, fullSteps = fullStepNames}
+                Addon.bestSequence = {score = nScore or 0, normScore = normS, seqText = table.concat(macros, "\n"), importStr = nImp, reasoningText = nReason, orderedSpellNames = ordered, fullSteps = fullStepNames, interleaveMap = nMap}
             end
             db5.bestSequence = Addon.bestSequence
             if not db5.optimizerHistory then db5.optimizerHistory = {} end
@@ -1371,7 +1377,7 @@ local pushBtn = CreateStyledButton(bottomRow, "Push to GRIP-EMS", 170, 32, funct
         -- No real training logs yet: never default to a stale persisted best sequence.
         -- Prefer a clean SimC-derived state (highlight From SimC) or an empty-state message.
         if dbInit.simcData and dbInit.simcData.castCounts and next(dbInit.simcData.castCounts) then
-            local simcSeqText = GenerateEMSSequence(dbInit.simcData.castCounts, dbInit.simcData.damageData or {})
+            local simcSeqText, simcInitMap = GenerateEMSSequence(dbInit.simcData.castCounts, dbInit.simcData.damageData or {})
             if simcSeqText and simcSeqText ~= "" then
                 local macros, ordered = ParseSequenceLines(simcSeqText)
                 local fullStepNames = {}
@@ -1384,7 +1390,7 @@ local pushBtn = CreateStyledButton(bottomRow, "Push to GRIP-EMS", 170, 32, funct
                 seqText = simcSeqText
                 importStr = impOK and simcImportStr or ""
                 reasoningText = "Generated from SimC import (no real logs)."
-                Addon.bestSequence = { score = 0, normScore = 0, seqText = seqText, importStr = importStr, reasoningText = reasoningText, orderedSpellNames = ordered, fullSteps = fullStepNames }
+                Addon.bestSequence = { score = 0, normScore = 0, seqText = seqText, importStr = importStr, reasoningText = reasoningText, orderedSpellNames = ordered, fullSteps = fullStepNames, interleaveMap = simcInitMap }
                 dbInit.bestSequence = Addon.bestSequence
                 HighlightTab(simcBtn)
                 local simcDeficit = ComputeDeficitSnapshot(dbInit.simcData.castCounts, dbInit.simcData, 0)

@@ -692,12 +692,10 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
             interleaveCandidates[sorted[i].name] = math.max(2, math.floor(#finalSteps / sorted[i].count))
         end
     else
-        -- Auto interleave off: any spell with real buff uptime and >=2 copies
-        -- collapses to a single node carrying interval = finalSteps / count.
-        -- Long-CD spells stay untouched (never duplicated).
+        -- Auto interleave: any spell with >=2 copies in the final sequence collapses
+        -- to a single node carrying interval = finalSteps / count.
         for name, cnt in pairs(stepCounts) do
-            local upInfo = buffByName[name]
-            if upInfo and upInfo.uptime > 0 and cnt >= 2 and not isLongCD(name) then
+            if cnt >= 2 then
                 interleaveCandidates[name] = math.max(2, math.floor(#finalSteps / cnt))
             end
         end
@@ -797,7 +795,7 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
     end
 
     DebugLog("info", "suggest-seq", string.format("Returning seq=%s, bestFitness=%.2f, unique=%d steps=%d", seqText and (#seqText > 0 and "OK" or "empty") or "nil", bestFitness or 0, #uniqueOrder, #finalSteps))
-    return seqText, importStr, reasoningText, bestFitness
+    return seqText, importStr, reasoningText, bestFitness, interleaveCandidates
 end
 
 -- ============================================
