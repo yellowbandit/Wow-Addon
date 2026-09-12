@@ -676,7 +676,8 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
         end
     end
 
-    -- ponytail: interleave only when explicitly enabled (positive cfg.interleave)
+    -- ponytail: interleave only when explicitly enabled (positive cfg.interleave);
+    -- otherwise auto-tag maintained buffs so they emit once with an interval.
     local interleaveCandidates = {}
     local minInterleave = cfg.interleave
     if minInterleave and minInterleave > 0 then
@@ -689,6 +690,16 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
         table.sort(sorted, function(a, b) return a.count > b.count end)
         for i = 1, math.min(minInterleave, #sorted) do
             interleaveCandidates[sorted[i].name] = math.max(2, math.floor(#finalSteps / sorted[i].count))
+        end
+    else
+        -- Auto interleave off: any spell with real buff uptime and >=2 copies
+        -- collapses to a single node carrying interval = finalSteps / count.
+        -- Long-CD spells stay untouched (never duplicated).
+        for name, cnt in pairs(stepCounts) do
+            local upInfo = buffByName[name]
+            if upInfo and upInfo.uptime > 0 and cnt >= 2 and not isLongCD(name) then
+                interleaveCandidates[name] = math.max(2, math.floor(#finalSteps / cnt))
+            end
         end
     end
 

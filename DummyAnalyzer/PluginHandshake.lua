@@ -4,6 +4,7 @@ local AddonName, Addon = ...
 -- Registers DummyAnalyzer as a reversibly-owned addon.
 -- Source of truth: jesperlive.github.io/GRIP-EMS-PluginAPI/reference/ai-context/
 local GetCharDB = Addon.GetCharDB
+local DebugLog = Addon.DebugLog
 local ExtractSpellName = Addon.ExtractSpellName
 local ExtractSpellFromSeqLine = Addon.ExtractSpellFromSeqLine
 local GenerateEMSImportString = Addon.GenerateEMSImportString
@@ -32,10 +33,10 @@ local function Ems_BuildSequenceData(seqName, orderedSteps)
     if not sequence then return nil, "no spells" end
     local valid, errs, warns = Addon.ValidateSequenceActions(sequence.versions and sequence.versions[1] and sequence.versions[1].actions)
     if errs and #errs > 0 then
-        DebugLog("EMS ValidateActions errors: " .. table.concat(errs, "; "))
+        DebugLog("info", "ems", "EMS ValidateActions errors: " .. table.concat(errs, "; "))
     end
     if warns and #warns > 0 then
-        DebugLog("EMS ValidateActions warnings: " .. table.concat(warns, "; "))
+        DebugLog("info", "ems", "EMS ValidateActions warnings: " .. table.concat(warns, "; "))
     end
     local now = time()
     local actionCount = #(sequence.versions[1].actions or {})

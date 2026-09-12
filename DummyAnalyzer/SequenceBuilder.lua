@@ -54,14 +54,12 @@ local function BuildIntervalMap(orderedSpellNames, cfg, intervalOverrides)
         for i = 1, math.min(minInterleave, #sorted) do
             intervalMap[sorted[i].name] = ComputeIntervalFromFreq(orderedSpellNames, freq, sorted[i].count)
         end
-    elseif rawInterleave == nil then
-        -- Legacy data without an interleave setting: keep the old auto-spacing.
-        local maxFreq = 0
-        for _, cnt in pairs(freq) do
-            if cnt > maxFreq then maxFreq = cnt end
-        end
+    else
+        -- cfg.interleave is 0 or unset (default): auto-collapse every spell that
+        -- repeats >= 2 times. Each such spell emits once with an interval so
+        -- GRIP-EMS weaves it every N base steps instead of listing N copies.
         for name, cnt in pairs(freq) do
-            if cnt >= 5 and cnt >= maxFreq * 0.4 then
+            if cnt >= 2 then
                 intervalMap[name] = ComputeIntervalFromFreq(orderedSpellNames, freq, cnt)
             end
         end
@@ -97,12 +95,16 @@ local function BuildActionsFromFlat(orderedSpellNames, intervalMap)
     local actions = {}
     local intervalApplied = {}
     for _, s in ipairs(orderedSpellNames) do
-        local act = { type = "action", macro = string.format("%s [combat] %s", GetActionPrefix(s), s) }
-        if intervalMap[s] and not intervalApplied[s] then
-            intervalApplied[s] = true
-            act.interval = intervalMap[s]
+        if intervalMap[s] and intervalApplied[s] then
+            -- Interleaved spell already emitted once with its interval; drop duplicates.
+        else
+            local act = { type = "action", macro = string.format("%s [combat] %s", GetActionPrefix(s), s) }
+            if intervalMap[s] then
+                intervalApplied[s] = true
+                act.interval = intervalMap[s]
+            end
+            actions[#actions + 1] = act
         end
-        actions[#actions + 1] = act
     end
     return actions
 end
