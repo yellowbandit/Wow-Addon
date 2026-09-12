@@ -290,6 +290,111 @@ local function EvaluateFitness(stepArr, ctx)
     return theoDps + reward - penalty
 end
 
+-- ============================================================
+-- INTERLEAVE SELECTOR (cfg.interleave = MAXIMUM, not a quota)
+-- ============================================================
+-- Simulates the GRIP-EMS runtime cadence for a candidate: the interleaved
+-- action fires every `interval` slots; every other slot is filled by the
+-- remaining spells in their original relative order (cycling), preserving
+-- the sequence length. This is the scoring-side mirror of what the EMS
+-- pipeline's interval handling actually does at runtime.
+local function BuildInterleavedRuntime(working, interleaveName, interval)
+    local others = {}
+    for _, name in ipairs(working) do
+        if name ~= interleaveName then
+            others[#others + 1] = name
+        end
+    end
+    if #others == 0 then
+        others = { interleaveName }
+    end
+    local runtime = {}
+    local oi = 0
+    for pos = 1, #working do
+        if (pos - 1) % interval == 0 then
+            runtime[#runtime + 1] = interleaveName
+        else
+            oi = oi + 1
+            if oi > #others then oi = 1 end
+            runtime[#runtime + 1] = others[oi]
+        end
+    end
+    return runtime
+end
+
+-- Selects up to cfg.interleave interleave winners. Winners are chosen
+-- greedily: each pass evaluates EVERY eligible (spell, interval) pair
+-- against the CURRENT working sequence, applies the single best strictly-
+-- improving pair, then re-evaluates the survivors against that new working
+-- sequence. A candidate earns its place only by raising real optimizer
+-- fitness; cfg.interleave is a cap, never a quota.
+-- Eligibility (cnt >= 2, not a long-CD) only gates consideration -- it does
+-- NOT prove an interleave is beneficial. Proving that is the fitness's job.
+-- Returns: interleaveCandidates map (name -> winning interval), possibly
+-- empty. The caller's `finalSteps` is never mutated.
+local function SelectInterleaves(finalSteps, stepCounts, ctx, cfg)
+    local candidates = {}
+    local maxWinners = cfg and cfg.interleave and cfg.interleave > 0 and math.floor(cfg.interleave) or 0
+    if maxWinners <= 0 then
+        return candidates
+    end
+
+    local eligible = {}
+    for name, cnt in pairs(stepCounts) do
+        if cnt >= 2 and not (ctx.isLongCD and ctx.isLongCD(name)) then
+            eligible[#eligible + 1] = name
+        end
+    end
+    if #eligible == 0 then
+        return candidates
+    end
+    table.sort(eligible)
+
+    local working = {}
+    for _, name in ipairs(finalSteps) do
+        working[#working + 1] = name
+    end
+
+    local nSelected = 0
+    while nSelected < maxWinners do
+        local baseline = EvaluateFitness(working, ctx)
+        local bestName, bestInterval, bestGain = nil, nil, nil
+        for _, cand in ipairs(eligible) do
+            local cnt = stepCounts[cand] or 1
+            -- Valid interval candidates for this spell: 2 through roughly the
+            -- cadence implied by its copy share, capped to the sequence length.
+            local maxInterval = math.max(2, math.min(#working, math.floor(#finalSteps / cnt) + 2))
+            for interval = 2, maxInterval do
+                local gain = EvaluateFitness(BuildInterleavedRuntime(working, cand, interval), ctx) - baseline
+                if not bestGain or gain > bestGain then
+                    bestName, bestInterval, bestGain = cand, interval, gain
+                end
+            end
+        end
+
+        -- Strict >: a tie (gain <= 0) does not win; no threshold is invented.
+        if not bestName or bestGain <= 0 then
+            break
+        end
+
+        candidates[bestName] = bestInterval
+        working = BuildInterleavedRuntime(working, bestName, bestInterval)
+        nSelected = nSelected + 1
+        local survivors = {}
+        for _, name in ipairs(eligible) do
+            if name ~= bestName then survivors[#survivors + 1] = name end
+        end
+        eligible = survivors
+        DebugLog("info", "suggest-seq", string.format("Interleave winner %d/%d: %s (interval:%d) gain=%.2f vs working baseline %.2f", nSelected, maxWinners, bestName, bestInterval, bestGain, baseline))
+    end
+
+    return candidates
+end
+
+Addon.SelectInterleaves = SelectInterleaves
+Addon.DebugEvaluateStepArray = EvaluateFitness
+Addon.DebugBuildInterleavedRuntime = BuildInterleavedRuntime
+
 Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, duration, buffGaps, seedSteps, priorHistory, selLogIds, customJitter, stepScale, requiredSpells)
     if not castCounts or not next(castCounts) then
         return "No cast data.", nil, "No cast data to analyze."
@@ -676,30 +781,11 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
         end
     end
 
-    -- ponytail: interleave only when explicitly enabled (positive cfg.interleave);
-    -- otherwise auto-tag maintained buffs so they emit once with an interval.
-    local interleaveCandidates = {}
-    local minInterleave = cfg.interleave
-    if minInterleave and minInterleave > 0 then
-        local sorted = {}
-        for name, cnt in pairs(stepCounts) do
-            if not isLongCD(name) then
-                table.insert(sorted, {name = name, count = cnt})
-            end
-        end
-        table.sort(sorted, function(a, b) return a.count > b.count end)
-        for i = 1, math.min(minInterleave, #sorted) do
-            interleaveCandidates[sorted[i].name] = math.max(2, math.floor(#finalSteps / sorted[i].count))
-        end
-    else
-        -- Auto interleave: any spell with >=2 copies in the final sequence collapses
-        -- to a single node carrying interval = finalSteps / count.
-        for name, cnt in pairs(stepCounts) do
-            if cnt >= 2 then
-                interleaveCandidates[name] = math.max(2, math.floor(#finalSteps / cnt))
-            end
-        end
-    end
+    -- cfg.interleave is a MAXIMUM number of interleave winners, NOT a quota.
+    -- Every winner must strictly raise the fitness of the current working
+    -- sequence; winners are applied greedily so later candidates are judged
+    -- against the sequence with earlier winners already folded in.
+    local interleaveCandidates = SelectInterleaves(finalSteps, stepCounts, ctx, cfg)
 
     -- =====================================================
     -- 15. SERIALIZATION: C_EncodingUtil CBOR + Deflate + Base64
