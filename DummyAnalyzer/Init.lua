@@ -341,10 +341,17 @@ local function BuildKidFriendlyDisplay(mode, logContext, score, duration, macros
         if mode == "next" and type(interleaveMap) == "table" and #ordered > 0 then
             -- Compact base-steps view: unique spells in base order with interval annotations,
             -- then an interleave legend. Shows the base sequence only, not the expanded copies.
+            -- The name column is padded to a fixed width so every "(interval:N)" annotation
+            -- and every "→ every N steps" legend line starts at the same visual column.
+            local nameCol = 0
+            for _, nm in ipairs(ordered) do
+                nameCol = math.max(nameCol, #nm)
+            end
+            nameCol = nameCol + 2
             for i, name in ipairs(ordered) do
                 local interval = interleaveMap[name]
                 if interval and interval > 0 then
-                    local pad = string.rep(" ", math.max(1, 13 - #name))
+                    local pad = string.rep(" ", nameCol - #name)
                     lines[#lines + 1] = ("|cffffff66%d. %s|r|cffaaaaaa%s(interval: %d)|r"):format(i, name, pad, interval)
                 else
                     lines[#lines + 1] = ("|cffffff66%d. %s|r"):format(i, name)
@@ -356,8 +363,8 @@ local function BuildKidFriendlyDisplay(mode, logContext, score, duration, macros
             for _, name in ipairs(ordered) do
                 local interval = interleaveMap[name]
                 if interval and interval > 0 then
-                    local pad = string.rep(" ", math.max(1, 10 - #name))
-                    legend[#legend + 1] = ("|cffaaaaaa%s%s→ every %d steps|r"):format(name, pad, interval)
+                    local pad = string.rep(" ", nameCol - #name)
+                    legend[#legend + 1] = ("|cffaaaaaa  %s%s→ every %d steps|r"):format(name, pad, interval)
                 end
             end
             if #legend > 0 then
@@ -366,6 +373,8 @@ local function BuildKidFriendlyDisplay(mode, logContext, score, duration, macros
                 for _, l in ipairs(legend) do
                     lines[#lines + 1] = l
                 end
+                lines[#lines + 1] = ""
+                lines[#lines + 1] = "|cff888888Interleave rules are applied when the sequence is pushed.|r"
             end
         elseif #spellLines == 0 then
             lines[#lines + 1] = "|cffff4444(No spells found - run a test first)|r"
