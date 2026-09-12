@@ -1126,7 +1126,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
                 end
             end
             local deficit = ComputeDeficitSnapshot(castCounts, db5.simcData, playerDuration)
-            local display = BuildKidFriendlyDisplay("next", ctx, nScore, playerDuration, macros, ordered, deficit, steps ~= nil)
+            local display = BuildKidFriendlyDisplay("next", ctx, nScore, playerDuration, macros, ordered, deficit, steps ~= nil, nMap)
             seqText = table.concat(macros, "\n")  -- ONLY /cast lines
             importStr = nImp; reasoningText = nReason
 HighlightTab(nextBtn)

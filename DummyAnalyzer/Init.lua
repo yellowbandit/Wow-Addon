@@ -281,7 +281,7 @@ end
 -- Kid-friendly display: turns a generated sequence into a Grade-3-reading-level report
 -- that the user can scan without prior WoW-macro knowledge.
 -- mode = "best" or "next"
-local function BuildKidFriendlyDisplay(mode, logContext, score, duration, macros, ordered, deficitInfo, hasBaseline)
+local function BuildKidFriendlyDisplay(mode, logContext, score, duration, macros, ordered, deficitInfo, hasBaseline, interleaveMap)
     -- logContext: { name="...", id=..., logsCount=N, logLabelById={id=label,...} } or nil
     -- SHORT-FOCUSED output: only the macro order + a one-line score context. No deficit walls,
     -- no step numbers, no logs-used list. What you see here is exactly what gets pushed.
@@ -338,7 +338,36 @@ local function BuildKidFriendlyDisplay(mode, logContext, score, duration, macros
             lines[#lines + 1] = "|cffd0d0d0Your first sequence. Run a test, then hit Next to improve it.|r"
         end
         lines[#lines + 1] = ""
-        if #spellLines == 0 then
+        if mode == "next" and type(interleaveMap) == "table" and #ordered > 0 then
+            -- Compact base-steps view: unique spells in base order with interval annotations,
+            -- then an interleave legend. Shows the base sequence only, not the expanded copies.
+            for i, name in ipairs(ordered) do
+                local interval = interleaveMap[name]
+                if interval and interval > 0 then
+                    local pad = string.rep(" ", math.max(1, 13 - #name))
+                    lines[#lines + 1] = ("|cffffff66%d. %s|r|cffaaaaaa%s(interval: %d)|r"):format(i, name, pad, interval)
+                else
+                    lines[#lines + 1] = ("|cffffff66%d. %s|r"):format(i, name)
+                end
+            end
+            lines[#lines + 1] = ""
+            lines[#lines + 1] = ("|cffd0d0d0Base steps: %d|r"):format(#ordered)
+            local legend = {}
+            for _, name in ipairs(ordered) do
+                local interval = interleaveMap[name]
+                if interval and interval > 0 then
+                    local pad = string.rep(" ", math.max(1, 10 - #name))
+                    legend[#legend + 1] = ("|cffaaaaaa%s%s→ every %d steps|r"):format(name, pad, interval)
+                end
+            end
+            if #legend > 0 then
+                lines[#lines + 1] = ""
+                lines[#lines + 1] = "|cffd0d0d0Interleave:|r"
+                for _, l in ipairs(legend) do
+                    lines[#lines + 1] = l
+                end
+            end
+        elseif #spellLines == 0 then
             lines[#lines + 1] = "|cffff4444(No spells found - run a test first)|r"
         else
             for _, s in ipairs(spellLines) do
