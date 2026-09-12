@@ -897,6 +897,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         if normScore > (Addon.bestSequence.normScore or 0) then
             Addon.bestSequence = {score = seqScore, normScore = normScore, seqText = seqText, importStr = importStr, reasoningText = reasoningText, orderedSpellNames = ordNames, fullSteps = fullStepNames, interleaveMap = seqInterleave}
         end
+        Addon.lastInterleaveMap = seqInterleave
         do -- auto-push: push the CURRENTLY-DISPLAYED steps (fresh seqText-derived),
             -- never a stale persisted bestSequence fullSteps cache.
             local s = (GetCharDB()).settings or {}
@@ -910,7 +911,8 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         table.insert(persistDb.optimizerHistory, 1, {timestamp = time(), score = seqScore, seqText = seqText, importStr = importStr, reasoningText = reasoningText})
         if #persistDb.optimizerHistory > 20 then table.remove(persistDb.optimizerHistory) end
     else
-        seqText = GenerateEMSSequence(castCounts, damageData, nil, buffUptime) or "No cast data."
+        seqText, Addon.lastInterleaveMap = GenerateEMSSequence(castCounts, damageData, nil, buffUptime)
+        seqText = seqText or "No cast data."
         if not C_EncodingUtil then
             err = "C_EncodingUtil not available (requires WoW 12.0+)"
         else
@@ -1034,6 +1036,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
             end
             local bestReasonStr = "Best DPS run from training logs."
             Addon.bestSequence = {score = bestScore or 0, normScore = (bestScore or 0) / math.max(bestLog.duration or 1, 1), seqText = table.concat(macros, "\n"), importStr = bestImportStr, reasoningText = bestReasonStr, orderedSpellNames = ordered, fullSteps = fullStepNames, interleaveMap = bestSeqMap}
+            Addon.lastInterleaveMap = bestSeqMap
             do -- auto-push
                 local s = (GetCharDB()).settings or {}
                 if s.autoPush and fullStepNames and #fullStepNames > 0 then
@@ -1082,6 +1085,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         importStr = simcImportStr
         reasoningText = "Generated from SimC import (no real logs)."
         Addon.bestSequence = { score = 0, normScore = 0, seqText = seqText, importStr = importStr, reasoningText = reasoningText, orderedSpellNames = ordered, fullSteps = fullStepNames, interleaveMap = simcSeqMap }
+        Addon.lastInterleaveMap = simcSeqMap
         local persistDb = GetCharDB()
         persistDb.bestSequence = Addon.bestSequence
         HighlightTab(simcBtn)
@@ -1134,6 +1138,7 @@ HighlightTab(nextBtn)
             local normS = nScore and (nScore / math.max(playerDuration, 1)) or 0
             if not Addon.bestSequence then Addon.bestSequence = {score = 0, normScore = 0} end
             if not Addon.bestSequence.normScore then Addon.bestSequence.normScore = 0 end
+            Addon.lastInterleaveMap = nMap
             if normS > Addon.bestSequence.normScore then
                 local fullStepNames = {}
                 for _, m in ipairs(macros) do
@@ -1391,6 +1396,7 @@ local pushBtn = CreateStyledButton(bottomRow, "Push to GRIP-EMS", 170, 32, funct
                 importStr = impOK and simcImportStr or ""
                 reasoningText = "Generated from SimC import (no real logs)."
                 Addon.bestSequence = { score = 0, normScore = 0, seqText = seqText, importStr = importStr, reasoningText = reasoningText, orderedSpellNames = ordered, fullSteps = fullStepNames, interleaveMap = simcInitMap }
+                Addon.lastInterleaveMap = simcInitMap
                 dbInit.bestSequence = Addon.bestSequence
                 HighlightTab(simcBtn)
                 local simcDeficit = ComputeDeficitSnapshot(dbInit.simcData.castCounts, dbInit.simcData, 0)
