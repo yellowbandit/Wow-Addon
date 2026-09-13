@@ -888,9 +888,41 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
     local seqScore = 0
     if suggestMode then
         local autoReqSpells = CollectRequiredSpells()
+        -- P5#1: seed the hill-climber with the highest-DPS selected log's actual
+        -- cast order (first-appearance order from its cast history) instead of a
+        -- cold score-sorted start.
+        local seedSteps
+        if selectedLogIds and #selectedLogIds > 0 then
+            local bestLog, bestDps = nil, 0
+            for _, log in ipairs(GetCharDB().logs or {}) do
+                for _, lid in ipairs(selectedLogIds) do
+                    if log.id == lid and log.castCounts and next(log.castCounts or {}) then
+                        local dmgTotal = 0
+                        if log.damageData then
+                            for _, d in pairs(log.damageData) do dmgTotal = dmgTotal + (d.total or 0) end
+                        end
+                        local dur = (log.duration or 1) > 0 and log.duration or 1
+                        local dps = dmgTotal / dur
+                        if dps > bestDps then bestDps, bestLog = dps, log end
+                        break
+                    end
+                end
+            end
+            if bestLog and bestLog.spellHistory and #bestLog.spellHistory > 0 then
+                local seen = {}
+                seedSteps = {}
+                for _, s in ipairs(bestLog.spellHistory) do
+                    local nm = s.name or s.spell or ""
+                    if nm ~= "" and not seen[nm] then
+                        seen[nm] = true
+                        seedSteps[#seedSteps + 1] = nm
+                    end
+                end
+            end
+        end
         local rawSeqText
         local seqInterleave
-        rawSeqText, importStr, reasoningText, seqScore, seqInterleave = GenerateSuggestedSequence(castCounts, damageData, buffUptime, playerDuration, buffGaps, nil, nil, selectedLogIds, nil, nil, autoReqSpells)
+        rawSeqText, importStr, reasoningText, seqScore, seqInterleave = GenerateSuggestedSequence(castCounts, damageData, buffUptime, playerDuration, buffGaps, seedSteps, nil, selectedLogIds, nil, nil, autoReqSpells)
         if not rawSeqText then return end
         seqScore = seqScore or 0
         local macros, ordNames = ParseSequenceLines(rawSeqText)
@@ -1185,7 +1217,7 @@ HighlightTab(nextBtn)
                 editBox:SetCursorPosition(0)
             end)
         end
-        print("|cff33ff33[DummyAnalyzer]|r Text copied to clipboard (Ctrl+V to paste).")
+        print("|cff33ff33[DummyAnalyzer]|r Text selected — press Ctrl+C to copy.")
     end, "primary")
     copyBtn:SetPoint("LEFT", bottomRow, "LEFT", 0, 0)
 
@@ -1486,8 +1518,7 @@ Addon.OpenReorderPanel = function(castCounts, damageData, buffUptime, playerDura
         local raw = Addon.EvaluateSequenceOrder(order, castCounts, damageData, buffUptime, playerDuration, buffGaps)
         raw = raw or 0
         local db = GetCharDB()
-        local guid = UnitGUID("player") or "default"
-        local simcApl = (db and db[guid] and db[guid].simcData and db[guid].simcData.aplOrder) or {}
+        local simcApl = (db and db.simcData and db.simcData.aplOrder) or {}
         local align = 0
         if #simcApl > 0 then
             local aplPos = {}

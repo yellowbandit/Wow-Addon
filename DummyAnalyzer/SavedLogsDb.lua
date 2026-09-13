@@ -8,6 +8,35 @@ local IsSecretValue = Addon.IsSecretValue
 
 local function GetCharDB()
     local key = Addon.playerGUID or "pending"
+    if key ~= "pending" then
+        local pending = DummyAnalyzerDB["pending"]
+        if pending then
+            local db = DummyAnalyzerDB[key]
+            if not db then
+                DummyAnalyzerDB[key] = pending
+            else
+                for k, v in pairs(pending) do
+                    if k == "logs" and type(v) == "table" then
+                        local maxId = 0
+                        for _, lg in ipairs(db.logs or {}) do maxId = math.max(maxId, lg.id or 0) end
+                        for _, lg in ipairs(v) do
+                            if lg and type(lg) == "table" then
+                                if not lg.id or lg.id <= maxId then
+                                    maxId = maxId + 1
+                                    lg.id = maxId
+                                end
+                                table.insert(db.logs, lg)
+                            end
+                        end
+                        if (db.nextId or 0) <= maxId then db.nextId = maxId + 1 end
+                    elseif db[k] == nil and v ~= nil then
+                        db[k] = v
+                    end
+                end
+            end
+            DummyAnalyzerDB["pending"] = nil
+        end
+    end
     DummyAnalyzerDB[key] = DummyAnalyzerDB[key] or {logs = {}, nextId = 1, simcLogId = 0}
     return DummyAnalyzerDB[key]
 end

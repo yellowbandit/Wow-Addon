@@ -146,6 +146,7 @@ end
 -- DIALOG TEMPLATE
 -- ============================================
 local function CreateDialog(parent, title, width, height, showClose)
+    local frame
     local overlay = CreateFrame("Frame", nil, parent or UIParent, "BackdropTemplate")
     overlay:SetAllPoints(parent or UIParent)
     overlay:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
@@ -154,7 +155,7 @@ local function CreateDialog(parent, title, width, height, showClose)
     overlay:EnableMouse(true)
     overlay:SetScript("OnMouseDown", function() overlay:Hide() frame:Hide() end)
 
-    local frame = CreateStyledFrame("Frame", nil, overlay)
+    frame = CreateStyledFrame("Frame", nil, overlay)
     frame:SetSize(width, height)
     frame:SetPoint("CENTER")
     frame:SetMovable(true)

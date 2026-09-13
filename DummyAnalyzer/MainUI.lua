@@ -872,7 +872,7 @@ function ShowDebugReport()
                 editBox:SetCursorPosition(0)
             end)
         end
-        print("|cff33ff33[DummyAnalyzer]|r Debug report copied to clipboard (Ctrl+V to paste).")
+        print("|cff33ff33[DummyAnalyzer]|r Report text selected — press Ctrl+C to copy.")
     end, "primary")
     copyBtn:SetPoint("LEFT", bottomRow, "LEFT", 0, 0)
 
@@ -1034,19 +1034,31 @@ function Addon.ParseCombatLogAsync(text, callback)
                         if not firstSec then firstSec = sec end
                         local elapsed = sec - firstSec
                         local fields = SplitCL(line:sub(evStart))
-                        if #fields >= 12 then
+                        if #fields >= 11 then
                             local evt, srcName = fields[1], fields[3]
                             if srcName == pName or srcName == pFull then
-                                local spellId, spellName = tonumber(fields[9]) or 0, fields[10] or "Unknown"
+                                -- Blizzard combat-log field order: event, sourceGUID, sourceName,
+                                -- sourceFlags, sourceRaidFlags, destGUID, destName, destFlags,
+                                -- destRaidFlags, then spellId=10, spellName=11, spellSchool=12.
+                                -- Advanced Combat Logging injects a variable-size extra block AFTER
+                                -- the spell trio, so suffix fields are read end-anchored below,
+                                -- never via fixed middle offsets.
+                                local spellId, spellName = tonumber(fields[10]) or 0, fields[11] or "Unknown"
                                 if evt == "SPELL_CAST_SUCCESS" then
-                                    local pType, curPow, maxPow = tonumber(fields[23]), tonumber(fields[24]), tonumber(fields[25])
                                     hist[#hist + 1] = {
                                         spell = spellName, spellId = spellId, time = elapsed,
-                                        power = (pType and curPow) and { type = pType, current = curPow, max = maxPow } or nil,
                                     }
                                     cCounts[spellName] = (cCounts[spellName] or 0) + 1
                                 elseif evt:match("_DAMAGE$") and not evt:match("_CAST_") and not evt:match("_AURA_") then
-                                    local amount = tonumber(fields[32]) or 0
+                                    -- *_DAMAGE suffix (Blizzard order): amount, overhealing, school,
+                                    -- resisted, blocked, absorbed, critical, glancing, crushing, isOffHand.
+                                    -- isOffHand is the final field, so amount sits 9 fields before it;
+                                    -- this holds in both basic and Advanced-Logging lines.
+                                    local amount = 0
+                                    local amountIdx = #fields - 9
+                                    if amountIdx > 12 then
+                                        amount = tonumber(fields[amountIdx]) or 0
+                                    end
                                     if amount > 0 then
                                         local d = dmgData[spellName] or { total = 0, hits = 0 }
                                         d.total = d.total + amount; d.hits = d.hits + 1
@@ -1353,7 +1365,10 @@ SlashCmdList["DUMMYDEBUG"] = function(msg)
     end
 end
 
-C_Timer.After(0, function()
+local initFrame = CreateFrame("Frame")
+initFrame:RegisterEvent("PLAYER_LOGIN")
+initFrame:SetScript("OnEvent", function()
+    initFrame:UnregisterEvent("PLAYER_LOGIN")
     Addon.playerGUID = UnitGUID("player")
     local okName, nm = pcall(UnitName, "player")
     if okName and nm then Addon.playerName = nm end
