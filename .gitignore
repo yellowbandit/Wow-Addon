@@ -27,3 +27,6 @@ desktop.ini
 # Auto-sync noise
 auto-sync.log
 CONFLICT_FLAG.txt
+
+# Developer-only scaffolding (local paths, personal setup)
+.dev/
