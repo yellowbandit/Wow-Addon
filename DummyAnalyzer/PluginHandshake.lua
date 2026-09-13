@@ -30,7 +30,8 @@ local function Ems_BuildSequenceData(seqName, orderedSteps)
     orderedSteps = clean
     local cfg = (GetCharDB()).settings or {}
     local dbX = GetCharDB()
-    local storedMap = Addon.lastInterleaveMap or (Addon.bestSequence and Addon.bestSequence.interleaveMap) or (dbX.bestSequence and dbX.bestSequence.interleaveMap) or {}
+    local storedMap = Addon.ResolveInterleaveMap(dbX.bestSequence)
+    DebugLog("info", "ems", "Interleave map at push: " .. Addon.FormatInterleaveMap(storedMap))
     local sequence, intervalMap = Addon.BuildSequence(orderedSteps, cfg, storedMap)
     if not sequence then return nil, "no spells" end
     local valid, errs, warns = Addon.ValidateSequenceActions(sequence.versions and sequence.versions[1] and sequence.versions[1].actions)

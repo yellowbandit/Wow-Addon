@@ -278,6 +278,62 @@ local function ParseSequenceLines(rawSeq)
     return macros, ordered
 end
 
+-- Compact base-steps view for a real interleave map: unique spells in base order with
+-- interval annotations, then an interleave legend and a GRIP-EMS weave example rotation.
+-- Shared by both "best" and "next" display branches so preview rendering is identical
+-- for every producer. Intervals shown exactly as stored; an empty map renders an
+-- explicit "Interleave: None". Never falls back to the expanded spellLines list.
+local function AppendInterleaveView(lines, ordered, interleaveMap)
+    local nameCol = 0
+    for _, nm in ipairs(ordered) do
+        nameCol = math.max(nameCol, #nm)
+    end
+    nameCol = nameCol + 2
+    lines[#lines + 1] = "|cffd0d0d0Base sequence:|r"
+    for i, name in ipairs(ordered) do
+        local interval = interleaveMap[name]
+        if interval and interval > 0 then
+            local pad = string.rep(" ", nameCol - #name)
+            lines[#lines + 1] = ("|cffffff66%d. %s|r|cffaaaaaa%s(interval: %d)|r"):format(i, name, pad, interval)
+        else
+            lines[#lines + 1] = ("|cffffff66%d. %s|r"):format(i, name)
+        end
+    end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = ("|cffd0d0d0Base steps: %d|r"):format(#ordered)
+    local legend = {}
+    for _, name in ipairs(ordered) do
+        local interval = interleaveMap[name]
+        if interval and interval > 0 then
+            local pad = string.rep(" ", nameCol - #name)
+            legend[#legend + 1] = ("|cffaaaaaa  %s%s→ every %d steps|r"):format(name, pad, interval)
+        end
+    end
+    local hasInterval = #legend > 0
+    if hasInterval then
+        local expanded = Addon.ExpandSequenceForPreview(ordered, interleaveMap, 20)
+        lines[#lines + 1] = ""
+        if expanded.truncated then
+            lines[#lines + 1] = ("|cffd0d0d0Example Rotation (first %d casts):|r"):format(#expanded.steps)
+        else
+            lines[#lines + 1] = "|cffd0d0d0Example Rotation:|r"
+        end
+        for i, s in ipairs(expanded.steps) do
+            lines[#lines + 1] = ("|cffd0d0d0  %d. %s|r"):format(i, s)
+        end
+    end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "|cffd0d0d0Interleave:|r"
+    for _, l in ipairs(legend) do
+        lines[#lines + 1] = l
+    end
+    if not hasInterval then
+        lines[#lines + 1] = "|cff888888  None|r"
+    end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "|cff888888Example Rotation mirrors the GRIP-EMS weave; intervals apply when the sequence is pushed.|r"
+end
+
 -- Kid-friendly display: turns a generated sequence into a Grade-3-reading-level report
 -- that the user can scan without prior WoW-macro knowledge.
 -- mode = "best" or "next"
@@ -320,7 +376,9 @@ local function BuildKidFriendlyDisplay(mode, logContext, score, duration, macros
             end
         end
         lines[#lines + 1] = ""
-        if #spellLines == 0 then
+        if type(interleaveMap) == "table" and #ordered > 0 then
+            AppendInterleaveView(lines, ordered, interleaveMap)
+        elseif #spellLines == 0 then
             lines[#lines + 1] = "|cffff4444(No spells found - run a test first)|r"
         else
             for _, s in ipairs(spellLines) do
@@ -338,59 +396,8 @@ local function BuildKidFriendlyDisplay(mode, logContext, score, duration, macros
             lines[#lines + 1] = "|cffd0d0d0Your first sequence. Run a test, then hit Next to improve it.|r"
         end
         lines[#lines + 1] = ""
-        if mode == "next" and type(interleaveMap) == "table" and #ordered > 0 then
-            -- Compact base-steps view: unique spells in base order with interval annotations,
-            -- then an interleave legend. Shows the base sequence only, not the expanded copies.
-            -- The name column is padded to a fixed width so every "(interval:N)" annotation
-            -- and every "→ every N steps" legend line starts at the same visual column.
-            local nameCol = 0
-            for _, nm in ipairs(ordered) do
-                nameCol = math.max(nameCol, #nm)
-            end
-            nameCol = nameCol + 2
-            lines[#lines + 1] = "|cffd0d0d0Base sequence:|r"
-            for i, name in ipairs(ordered) do
-                local interval = interleaveMap[name]
-                if interval and interval > 0 then
-                    local pad = string.rep(" ", nameCol - #name)
-                    lines[#lines + 1] = ("|cffffff66%d. %s|r|cffaaaaaa%s(interval: %d)|r"):format(i, name, pad, interval)
-                else
-                    lines[#lines + 1] = ("|cffffff66%d. %s|r"):format(i, name)
-                end
-            end
-            lines[#lines + 1] = ""
-            lines[#lines + 1] = ("|cffd0d0d0Base steps: %d|r"):format(#ordered)
-            local legend = {}
-            for _, name in ipairs(ordered) do
-                local interval = interleaveMap[name]
-                if interval and interval > 0 then
-                    local pad = string.rep(" ", nameCol - #name)
-                    legend[#legend + 1] = ("|cffaaaaaa  %s%s→ every %d steps|r"):format(name, pad, interval)
-                end
-            end
-            local hasInterval = #legend > 0
-            if hasInterval then
-                local expanded = Addon.ExpandSequenceForPreview(ordered, interleaveMap, 20)
-                lines[#lines + 1] = ""
-                if expanded.truncated then
-                    lines[#lines + 1] = ("|cffd0d0d0Example Rotation (first %d casts):|r"):format(#expanded.steps)
-                else
-                    lines[#lines + 1] = "|cffd0d0d0Example Rotation:|r"
-                end
-                for i, s in ipairs(expanded.steps) do
-                    lines[#lines + 1] = ("|cffd0d0d0  %d. %s|r"):format(i, s)
-                end
-            end
-            lines[#lines + 1] = ""
-            lines[#lines + 1] = "|cffd0d0d0Interleave:|r"
-            for _, l in ipairs(legend) do
-                lines[#lines + 1] = l
-            end
-            if not hasInterval then
-                lines[#lines + 1] = "|cff888888  None|r"
-            end
-            lines[#lines + 1] = ""
-            lines[#lines + 1] = "|cff888888Example Rotation mirrors the GRIP-EMS weave; intervals apply when the sequence is pushed.|r"
+        if #ordered > 0 then
+            AppendInterleaveView(lines, ordered, type(interleaveMap) == "table" and interleaveMap or {})
         elseif #spellLines == 0 then
             lines[#lines + 1] = "|cffff4444(No spells found - run a test first)|r"
         else

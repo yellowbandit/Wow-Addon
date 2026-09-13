@@ -17,51 +17,18 @@ local function NormalizeSpellName(s)
     return s
 end
 
-local function ComputeFreq(orderedSpellNames)
-    local freq = {}
-    for _, spell in ipairs(orderedSpellNames or {}) do
-        local s = NormalizeSpellName(spell)
-        if s ~= "" then
-            freq[s] = (freq[s] or 0) + 1
-        end
-    end
-    return freq
-end
-
-local function ComputeIntervalFromFreq(orderedSpellNames, freq, count)
-    return math.max(2, math.floor(#orderedSpellNames / math.max(1, count)))
-end
-
+-- BuildIntervalMap is the SINGLE source of truth for interleave intervals in the
+-- EMS pipeline. It accepts ONLY explicit overrides: the optimizer's SelectInterleaves
+-- winners (passed as intervalOverrides by GenerateSuggestedSequence), or a previously
+-- stored/resolved map (Addon.ResolveInterleaveMap at push time). The old frequency
+-- heuristic branch - which invented intervals from cast counts whenever
+-- intervalOverrides was nil - was removed so the map can never silently diverge from
+-- what the optimizer selected or what the preview shows.
 local function BuildIntervalMap(orderedSpellNames, cfg, intervalOverrides)
     local intervalMap = {}
-    if intervalOverrides ~= nil then
-        if type(intervalOverrides) == "table" then
-            for name, iv in pairs(intervalOverrides) do
-                intervalMap[name] = math.max(1, math.min(50, NumberOrZero(iv)))
-            end
-        end
-        return intervalMap
-    end
-    local freq = ComputeFreq(orderedSpellNames)
-    local rawInterleave = cfg.interleave
-    local minInterleave = NumberOrZero(rawInterleave)
-    if minInterleave > 0 then
-        local sorted = {}
-        for name, cnt in pairs(freq) do
-            table.insert(sorted, { name = name, count = cnt })
-        end
-        table.sort(sorted, function(a, b) return a.count > b.count end)
-        for i = 1, math.min(minInterleave, #sorted) do
-            intervalMap[sorted[i].name] = ComputeIntervalFromFreq(orderedSpellNames, freq, sorted[i].count)
-        end
-    else
-        -- cfg.interleave is 0 or unset (default): auto-collapse every spell that
-        -- repeats >= 2 times. Each such spell emits once with an interval so
-        -- GRIP-EMS weaves it every N base steps instead of listing N copies.
-        for name, cnt in pairs(freq) do
-            if cnt >= 2 then
-                intervalMap[name] = ComputeIntervalFromFreq(orderedSpellNames, freq, cnt)
-            end
+    if type(intervalOverrides) == "table" then
+        for name, iv in pairs(intervalOverrides) do
+            intervalMap[name] = math.max(1, math.min(50, NumberOrZero(iv)))
         end
     end
     return intervalMap
@@ -118,7 +85,8 @@ end
 -- BuildActionsFromFlat, which GRIP-EMS expands identically, so the preview always
 -- matches what Push to GRIP-EMS builds.
 -- @param baseOrdered array of spell names in base order (normalized internally)
--- @param intervalMap table spell name -> interval (clamped 1..50, non-positive ignored)
+-- @param intervalMap table spell name -> interval (GRIP-EMS-emulated clamp: only a
+-- minimum of 1 is enforced like GRIP-EMS; non-positive ignored)
 -- @param maxCasts number|nil maximum casts to return (defaults PREVIEW_MAX_CASTS)
 -- @return table { steps = {name,...}, truncated = boolean }
 local PREVIEW_MAX_CASTS = 20
@@ -136,7 +104,9 @@ Addon.ExpandSequenceForPreview = function(baseOrdered, intervalMap, maxCasts)
     for _, name in ipairs(base) do
         local iv = type(intervalMap) == "table" and intervalMap[name] or nil
         if iv and iv > 0 then
-            local interval = math.max(1, math.min(50, NumberOrZero(iv)))
+            -- Match GRIP-EMS exactly: clamp only the MINIMUM to 1, never cap at 50.
+            local interval = NumberOrZero(iv)
+            if interval < 1 then interval = 1 end
             local k = interval
             while k <= originalCount and totalInserted < 200 do
                 local bucket = insertAfter[k]
@@ -294,4 +264,37 @@ Addon.SerializeEMSSequence = function(sequence, seqName)
     local ok3, base64 = pcall(C_EncodingUtil.EncodeBase64, compressed)
     if not ok3 or not base64 then return nil end
     return EMS_IMPORT_PREFIX .. base64
+end
+
+-- Deterministic rendering of an interleave map: "Name = N" entries sorted by name,
+-- joined with ", ", or "none" when empty/nil. Used in DebugLog lines so generation,
+-- preview, and push all log the same value for cross-checks.
+Addon.FormatInterleaveMap = function(intervalMap)
+    if type(intervalMap) ~= "table" then return "none" end
+    local entries = {}
+    for name, iv in pairs(intervalMap) do
+        if iv and iv > 0 then
+            entries[#entries + 1] = name .. " = " .. tostring(iv)
+        end
+    end
+    if #entries == 0 then return "none" end
+    table.sort(entries)
+    return table.concat(entries, ", ")
+end
+
+-- Resolve the interleave map that must be used when storing or pushing a sequence.
+-- Priority: the freshest known map wins. An EMPTY table is a real value - a fresh
+-- "no interleaves" result - and beats any stale persisted map, preventing a previous
+-- optimize/push from resurrecting intervals the user already cleared.
+Addon.ResolveInterleaveMap = function(persistedBest)
+    if type(Addon.lastInterleaveMap) == "table" then
+        return Addon.lastInterleaveMap
+    end
+    if type(Addon.bestSequence) == "table" and type(Addon.bestSequence.interleaveMap) == "table" then
+        return Addon.bestSequence.interleaveMap
+    end
+    if type(persistedBest) == "table" and type(persistedBest.interleaveMap) == "table" then
+        return persistedBest.interleaveMap
+    end
+    return {}
 end

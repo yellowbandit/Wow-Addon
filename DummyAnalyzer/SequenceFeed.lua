@@ -78,7 +78,7 @@ local function MakeStyledDropdown(parent, options, default, onSelect, width)
     return btn, menu
 end
 
-local function GenerateEMSImportString(castCounts, damageData, orderedSteps)
+local function GenerateEMSImportString(castCounts, damageData, orderedSteps, interleaveMap)
     if not castCounts or not next(castCounts) then return nil end
     if not C_EncodingUtil then return nil end
     local sorted = {}
@@ -146,11 +146,20 @@ local function GenerateEMSImportString(castCounts, damageData, orderedSteps)
     -- Single EMS builder owns all sequence fields; serialize here only.
     local names = {}
     for _, entry in ipairs(sorted) do names[#names + 1] = entry.name end
+    -- Interleave map is the single source of truth: a real map is used verbatim.
+    -- The frequency-based fallback is legacy-only for callers without a map
+    -- (IterateSequence); optimizer-driven paths always pass the optimizer's map.
     local overrides = {}
-    local maxCount = sorted[1] and sorted[1].count or 1
-    for _, entry in ipairs(sorted) do
-        if entry.count >= 5 and entry.count >= maxCount * 0.4 then
-            overrides[entry.name] = math.max(2, math.min(6, math.floor(#sorted / math.min(entry.count, #sorted))))
+    if type(interleaveMap) == "table" then
+        for name, iv in pairs(interleaveMap) do
+            if iv and iv > 0 then overrides[name] = iv end
+        end
+    else
+        local maxCount = sorted[1] and sorted[1].count or 1
+        for _, entry in ipairs(sorted) do
+            if entry.count >= 5 and entry.count >= maxCount * 0.4 then
+                overrides[entry.name] = math.max(2, math.min(6, math.floor(#sorted / math.min(entry.count, #sorted))))
+            end
         end
     end
     local sequence = Addon.BuildSequence(names, GetCharDB().settings or {}, overrides)
@@ -916,7 +925,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         if not C_EncodingUtil then
             err = "C_EncodingUtil not available (requires WoW 12.0+)"
         else
-            local ok, result = pcall(GenerateEMSImportString, castCounts, damageData)
+            local ok, result = pcall(GenerateEMSImportString, castCounts, damageData, nil, Addon.lastInterleaveMap)
             if ok and result then
                 importStr = result
             else
@@ -1023,7 +1032,9 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
                 ctx.logLabelById[0] = ctx.logLabelById[0] or "SimC import (DPS weights)"
             end
             local deficit = ComputeDeficitSnapshot(bestLog.castCounts, db.simcData, bestLog.duration or 1)
-            local display = BuildKidFriendlyDisplay("best", ctx, bestScore, math.max(bestLog.duration or 1, 1), macros, ordered, deficit)
+            local bestDispMap = bestSeqMap or (Addon.bestSequence and Addon.bestSequence.interleaveMap)
+            DebugLog("info", "BestSeq", "Preview interleave map: " .. Addon.FormatInterleaveMap(bestDispMap))
+            local display = BuildKidFriendlyDisplay("best", ctx, bestScore, math.max(bestLog.duration or 1, 1), macros, ordered, deficit, nil, bestDispMap)
             local fullStepNames = {}
             for _, m in ipairs(macros) do
                 local sn = ExtractSpellFromSeqLine(m)
@@ -1031,7 +1042,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
             end
             local bestImportStr = ""
             if C_EncodingUtil then
-                local ok, s = pcall(GenerateEMSImportString, bestLog.castCounts, bestLog.damageData or {})
+                local ok, s = pcall(GenerateEMSImportString, bestLog.castCounts, bestLog.damageData or {}, nil, bestDispMap)
                 if ok and type(s) == "string" then bestImportStr = s end
             end
             local bestReasonStr = "Best DPS run from training logs."
@@ -1079,7 +1090,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
             local sn = ExtractSpellFromSeqLine(m)
             if sn and sn ~= "" then fullStepNames[#fullStepNames + 1] = sn end
         end
-        local simcImportStr = GenerateEMSImportString(simcCastCounts, simcDamage)
+        local simcImportStr = GenerateEMSImportString(simcCastCounts, simcDamage, nil, simcSeqMap)
         -- Update closure variables in-place (same pattern as Best/Next buttons)
         seqText = simcSeqText
         importStr = simcImportStr
@@ -1091,7 +1102,8 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         HighlightTab(simcBtn)
         local simcCtx = { logLabel = "SimC", id = nil }
         local simcDeficit = ComputeDeficitSnapshot(simcCastCounts, db.simcData, 0)
-        local simcDisplay = BuildKidFriendlyDisplay("best", simcCtx, 0, 1, macros, ordered, simcDeficit)
+        DebugLog("info", "simc-gen", "Preview interleave map: " .. Addon.FormatInterleaveMap(simcSeqMap))
+        local simcDisplay = BuildKidFriendlyDisplay("best", simcCtx, 0, 1, macros, ordered, simcDeficit, nil, simcSeqMap)
         SetEditText(GetSimcWarning() .. simcDisplay .. "\n\n|cffffff00Run a training dummy test, then click Best Sequence to optimize.|r")
         print("|cff33ff33[DummyAnalyzer]|r Generated basic sequence from SimC import (" .. #ordered .. " spells).")
     end, "secondary")
@@ -1130,6 +1142,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
                 end
             end
             local deficit = ComputeDeficitSnapshot(castCounts, db5.simcData, playerDuration)
+            DebugLog("info", "next-seq", "Preview interleave map: " .. Addon.FormatInterleaveMap(nMap))
             local display = BuildKidFriendlyDisplay("next", ctx, nScore, playerDuration, macros, ordered, deficit, steps ~= nil, nMap)
             seqText = table.concat(macros, "\n")  -- ONLY /cast lines
             importStr = nImp; reasoningText = nReason
@@ -1372,7 +1385,7 @@ local pushBtn = CreateStyledButton(bottomRow, "Push to GRIP-EMS", 170, 32, funct
             seqText = newText
             local macros2, ord2 = ParseSequenceLines(newText)
             local deficit = ComputeDeficitSnapshot(castCounts, GetCharDB().simcData, playerDuration)
-            SetEditText(GetSimcWarning() .. BuildKidFriendlyDisplay("best", { logLabel = "Reorder", id = nil }, Addon.bestSequence.score or 0, playerDuration or 1, macros2, ord2, deficit))
+            SetEditText(GetSimcWarning() .. BuildKidFriendlyDisplay("best", { logLabel = "Reorder", id = nil }, Addon.bestSequence.score or 0, playerDuration or 1, macros2, ord2, deficit, nil, Addon.bestSequence and Addon.bestSequence.interleaveMap))
             ClearHighlights()
         end)
     end)
@@ -1404,7 +1417,7 @@ local pushBtn = CreateStyledButton(bottomRow, "Push to GRIP-EMS", 170, 32, funct
                     if sn and sn ~= "" then fullStepNames[#fullStepNames + 1] = sn end
                 end
                 local impOK, simcImportStr
-                if C_EncodingUtil then impOK, simcImportStr = pcall(GenerateEMSImportString, dbInit.simcData.castCounts, dbInit.simcData.damageData or {}) end
+                if C_EncodingUtil then impOK, simcImportStr = pcall(GenerateEMSImportString, dbInit.simcData.castCounts, dbInit.simcData.damageData or {}, nil, simcInitMap) end
                 seqText = simcSeqText
                 importStr = impOK and simcImportStr or ""
                 reasoningText = "Generated from SimC import (no real logs)."
@@ -1413,7 +1426,7 @@ local pushBtn = CreateStyledButton(bottomRow, "Push to GRIP-EMS", 170, 32, funct
                 dbInit.bestSequence = Addon.bestSequence
                 HighlightTab(simcBtn)
                 local simcDeficit = ComputeDeficitSnapshot(dbInit.simcData.castCounts, dbInit.simcData, 0)
-                local simcDisplay = BuildKidFriendlyDisplay("best", { logLabel = "SimC", id = nil }, 0, 1, macros, ordered, simcDeficit)
+                local simcDisplay = BuildKidFriendlyDisplay("best", { logLabel = "SimC", id = nil }, 0, 1, macros, ordered, simcDeficit, nil, simcInitMap)
                 initContent = GetSimcWarning() .. simcDisplay .. "\n\n|cffffff00Run a training dummy test, then click Best Sequence to optimize.|r"
             else
                 initContent = GetSimcWarning() .. "|cffd0d0d0No sequences yet.|r\n\nClick From SimC, or run a training dummy test and click Best Sequence."
@@ -1427,12 +1440,12 @@ local pushBtn = CreateStyledButton(bottomRow, "Push to GRIP-EMS", 170, 32, funct
         local macros, ordered = ParseSequenceLines(seqText)
         local ctx = { logLabel = "suggested", id = nil }
         local deficit = ComputeDeficitSnapshot(castCounts, GetCharDB().simcData, playerDuration)
-        initContent = GetSimcWarning() .. BuildKidFriendlyDisplay("best", ctx, seqScore or 0, playerDuration or 1, macros, ordered, deficit)
+        initContent = GetSimcWarning() .. BuildKidFriendlyDisplay("best", ctx, seqScore or 0, playerDuration or 1, macros, ordered, deficit, nil, Addon.lastInterleaveMap)
     elseif suggestMode and Addon.bestSequence and Addon.bestSequence.seqText and Addon.bestSequence.seqText ~= "" then
         local macros, ordered = ParseSequenceLines(Addon.bestSequence.seqText)
         local ctx = { logLabel = "suggested", id = nil }
         local deficit = ComputeDeficitSnapshot(castCounts, GetCharDB().simcData, playerDuration)
-        initContent = GetSimcWarning() .. BuildKidFriendlyDisplay("best", ctx, Addon.bestSequence.score or 0, playerDuration or 1, macros, ordered, deficit)
+        initContent = GetSimcWarning() .. BuildKidFriendlyDisplay("best", ctx, Addon.bestSequence.score or 0, playerDuration or 1, macros, ordered, deficit, nil, Addon.bestSequence and Addon.bestSequence.interleaveMap)
         seqText = Addon.bestSequence.seqText
         importStr = Addon.bestSequence.importStr or importStr
         reasoningText = Addon.bestSequence.reasoningText or reasoningText
@@ -1440,7 +1453,7 @@ local pushBtn = CreateStyledButton(bottomRow, "Push to GRIP-EMS", 170, 32, funct
         local macros, ordered = ParseSequenceLines(seqText)
         local ctx = { logLabel = "suggested", id = nil }
         local deficit = ComputeDeficitSnapshot(castCounts, GetCharDB().simcData, playerDuration)
-        initContent = GetSimcWarning() .. BuildKidFriendlyDisplay("best", ctx, seqScore or 0, playerDuration or 1, macros, ordered, deficit)
+        initContent = GetSimcWarning() .. BuildKidFriendlyDisplay("best", ctx, seqScore or 0, playerDuration or 1, macros, ordered, deficit, nil, Addon.lastInterleaveMap)
     else
         initContent = (importStr or "") or ""
     end

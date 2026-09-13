@@ -786,6 +786,7 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
     -- sequence; winners are applied greedily so later candidates are judged
     -- against the sequence with earlier winners already folded in.
     local interleaveCandidates = SelectInterleaves(finalSteps, stepCounts, ctx, cfg)
+    DebugLog("info", "suggest-seq", "Interleave winners: " .. Addon.FormatInterleaveMap(interleaveCandidates))
 
     -- =====================================================
     -- 15. SERIALIZATION: C_EncodingUtil CBOR + Deflate + Base64
