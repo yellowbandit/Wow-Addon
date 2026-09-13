@@ -510,7 +510,6 @@ local function IsSecretValue(val)
     return not okCmp
 end
 Addon.simcDialog = nil
-Addon.clogDialog = nil
 Addon.comparisonPopup = nil
 local MAX_TRACKED_BUFF_DURATION = 120
 local MAX_TRACKED_DEBUFF_DURATION = 300
