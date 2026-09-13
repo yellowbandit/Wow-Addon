@@ -870,7 +870,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
 
     local scrollFrame = CreateFrame("ScrollFrame", nil, exportDialog, "UIPanelScrollFrameTemplate")
     scrollFrame:SetPoint("TOPLEFT", exportDialog, "TOPLEFT", 16, -86)
-    scrollFrame:SetPoint("BOTTOMRIGHT", exportDialog, "BOTTOMRIGHT", -25, 50)
+    scrollFrame:SetPoint("BOTTOMRIGHT", exportDialog, "BOTTOMRIGHT", -25, 80)
 
     local editBox = CreateFrame("EditBox", nil, scrollFrame)
     editBox:SetMultiLine(true)
@@ -884,6 +884,57 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
 
     -- Compute data BEFORE closures (Lua 5.1: locals must be declared before use)
     local seqText, importStr, reasoningText
+
+    -- Collapsible "Why this order?" reasoning section (below the kid-friendly preview).
+    -- The bar sits between the preview and the bottom action row; expanding it re-anchors
+    -- the preview's bottom edge upward so the reason box has room without overlap.
+    -- reasoningText is a local above this point, so the toggle closure reads the current value.
+    local reasonExpanded = false
+    local reasonBar = CreateStyledFrame("Button", nil, exportDialog)
+    reasonBar:SetPoint("BOTTOMLEFT", exportDialog, "BOTTOMLEFT", 16, 46)
+    reasonBar:SetPoint("BOTTOMRIGHT", exportDialog, "BOTTOMRIGHT", -25, 46)
+    reasonBar:SetHeight(26)
+    reasonBar:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
+    reasonBar:SetBackdropColor(C.btn[1], C.btn[2], C.btn[3], C.btn[4])
+    reasonBar:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], C.border[4])
+    local reasonLabel = reasonBar:CreateFontString(nil, "OVERLAY")
+    SafeSetFont(reasonLabel, BOLD_FONT, 12)
+    reasonLabel:SetText("Why this order?  \226\150\184")
+    reasonLabel:SetPoint("LEFT", reasonBar, "LEFT", 10, 0)
+    reasonLabel:SetTextColor(C.text[1], C.text[2], C.text[3], C.text[4])
+
+    local reasonBox = CreateFrame("ScrollFrame", nil, exportDialog, "UIPanelScrollFrameTemplate")
+    reasonBox:SetPoint("TOPLEFT", reasonBar, "BOTTOMLEFT", 0, -8)
+    reasonBox:SetPoint("TOPRIGHT", reasonBar, "BOTTOMRIGHT", 0, -8)
+    reasonBox:SetHeight(210)
+    local reasonEdit = CreateFrame("EditBox", nil, reasonBox)
+    reasonEdit:SetMultiLine(true)
+    reasonEdit:SetFontObject(ChatFontNormal)
+    reasonEdit:SetTextColor(0.85, 0.85, 0.85, 1)
+    reasonEdit:SetWidth(600)
+    reasonEdit:EnableMouse(true)
+    reasonBox:SetScrollChild(reasonEdit)
+    reasonBox:Hide()
+
+    local function SetReasonExpanded(v)
+        reasonExpanded = v
+        if v then
+            local txt = reasoningText or "(no reasoning generated)"
+            reasonEdit:SetText(txt)
+            local lines = 1
+            for _ in string.gmatch(txt, "\n") do lines = lines + 1 end
+            reasonEdit:SetHeight(math.max(210, lines * 14 + 20))
+            reasonBox:SetVerticalScroll(0)
+            reasonBox:Show()
+            reasonLabel:SetText("Why this order?  \226\150\190")
+            scrollFrame:SetPoint("BOTTOMRIGHT", exportDialog, "BOTTOMRIGHT", -25, 80 + 210 + 8)
+        else
+            reasonBox:Hide()
+            reasonLabel:SetText("Why this order?  \226\150\184")
+            scrollFrame:SetPoint("BOTTOMRIGHT", exportDialog, "BOTTOMRIGHT", -25, 80)
+        end
+    end
+    reasonBar:SetScript("OnClick", function() SetReasonExpanded(not reasonExpanded) end)
     local err = nil
     local seqScore = 0
     if suggestMode then
@@ -1165,6 +1216,53 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         DebugLog("info", "next-seq", string.format("nSeq=%s, nScore=%s", tostring(nSeq and #nSeq > 0), tostring(nScore)))
         if nSeq then
             local macros, ordered = ParseSequenceLines(nSeq)
+            -- Requirement 3: build a one-line plain-language diff vs the previous suggestion.
+            -- db5.optimizerHistory[1] is still the PRIOR entry here (the new one is inserted below).
+            local diffSummary = nil
+            local prevEntry = db5 and db5.optimizerHistory and db5.optimizerHistory[1]
+            if prevEntry and ordered then
+                local prevMacros, prevOrder = ParseSequenceLines(prevEntry.seqText or "")
+                if prevOrder and #prevOrder > 0 then
+                    local prevPos, newPos = {}, {}
+                    for i, name in ipairs(prevOrder) do prevPos[name] = i end
+                    for i, name in ipairs(ordered) do newPos[name] = i end
+                    local moves, added, removed, freqItems = {}, {}, {}, {}
+                    for name, np in pairs(newPos) do
+                        local pp = prevPos[name]
+                        if pp and pp ~= np then moves[#moves + 1] = {name = name, from = pp, to = np, shift = math.abs(np - pp)} end
+                        if not pp then added[#added + 1] = name end
+                    end
+                    for name in pairs(prevPos) do
+                        if not newPos[name] then removed[#removed + 1] = name end
+                    end
+                    table.sort(moves, function(a, b) return a.shift > b.shift end)
+                    local function CountSpells(macroList)
+                        local c = {}
+                        for _, m in ipairs(macroList or {}) do
+                            local sn = ExtractSpellFromSeqLine(m)
+                            if sn and sn ~= "" then c[sn] = (c[sn] or 0) + 1 end
+                        end
+                        return c
+                    end
+                    local prevCounts = CountSpells(prevMacros)
+                    local newCounts = CountSpells(macros)
+                    for name, c in pairs(newCounts) do
+                        local pc = prevCounts[name] or 0
+                        if pc ~= c then freqItems[#freqItems + 1] = string.format("%s casts %d->%d", name, pc, c) end
+                    end
+                    table.sort(freqItems)
+                    local items = {}
+                    for _, m in ipairs(moves) do items[#items + 1] = string.format("%s moved from position %d to %d", m.name, m.from, m.to) end
+                    for _, a in ipairs(added) do items[#items + 1] = "Added " .. a end
+                    for _, r in ipairs(removed) do items[#items + 1] = "Removed " .. r end
+                    for _, f in ipairs(freqItems) do items[#items + 1] = f end
+                    if #items > 0 then
+                        local capped, ccap = {}, math.min(4, #items)
+                        for i = 1, ccap do capped[i] = items[i] end
+                        diffSummary = "Changed vs previous: " .. table.concat(capped, "; ") .. (#items > ccap and (" (+" .. (#items - ccap) .. " more)") or "")
+                    end
+                end
+            end
             -- Find the most recent real log to compare against
             local ctx = { logLabel = nil, id = nil }
             for _, log in ipairs(db5.logs) do
@@ -1177,7 +1275,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
             DebugLog("info", "next-seq", "Preview interleave map: " .. Addon.FormatInterleaveMap(nMap))
             local display = BuildKidFriendlyDisplay("next", ctx, nScore, playerDuration, macros, ordered, deficit, steps ~= nil, nMap)
             seqText = table.concat(macros, "\n")  -- ONLY /cast lines
-            importStr = nImp; reasoningText = nReason
+            importStr = nImp; reasoningText = (diffSummary and (diffSummary .. "\n\n") or "") .. (nReason or "")
 HighlightTab(nextBtn)
         SetEditText(GetSimcWarning() .. display)
             local normS = nScore and (nScore / math.max(playerDuration, 1)) or 0

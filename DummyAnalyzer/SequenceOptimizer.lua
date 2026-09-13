@@ -848,6 +848,44 @@ Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, d
     reasonLines[#reasonLines + 1] = string.format("Generations: %d  |  Best Fitness: %s", generation, Addon.FormatNumber(bestFitness))
     reasonLines[#reasonLines + 1] = string.format("%d spells, %d unique, %d total steps", #uniqueOrder, #baseEntries, #finalSteps)
     reasonLines[#reasonLines + 1] = ""
+    -- Data-source banner: state in plain language what this run was judged against.
+    local sourceDesc
+    do
+        local dbRef = GetCharDB()
+        local logsList = (dbRef and dbRef.logs) or {}
+        local hasIds = type(selLogIds) == "table" and #selLogIds > 0
+        local selSet = {}
+        if hasIds then
+            for _, id in ipairs(selLogIds) do selSet[id] = true end
+        end
+        local realLogs = {}
+        for _, log in ipairs(logsList) do
+            if not log.isSimC then
+                local isSel = (not hasIds) or selSet[log.id]
+                if isSel then realLogs[#realLogs + 1] = log end
+            end
+        end
+        if #realLogs > 0 then
+            local best = realLogs[1]
+            for _, l in ipairs(realLogs) do
+                if (l.dps or 0) > (best.dps or 0) then best = l end
+            end
+            local bestLabel = best.detectedSeqName
+            if not bestLabel then bestLabel = string.match(best.label or "", "%[([^%]]+)%]$") end
+            if not bestLabel then bestLabel = "#" .. tostring(best.id or "?") end
+            sourceDesc = string.format(
+                "Compared against %d saved log%s (best: %s, %s DPS)",
+                #realLogs,
+                #realLogs == 1 and "" or "s",
+                bestLabel,
+                Addon.FormatNumber(best.dps or 0)
+            )
+        else
+            sourceDesc = "Compared against SimC import only — no saved logs selected"
+        end
+    end
+    reasonLines[#reasonLines + 1] = "Data source: " .. sourceDesc
+    reasonLines[#reasonLines + 1] = ""
 
     reasonLines[#reasonLines + 1] = "--- Deficit Matrix (actual ratio / simc ratio) ---"
     local sortedDef = {}
