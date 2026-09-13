@@ -17,6 +17,9 @@ local EMS_PLUGIN_VERSION = "2.2.0"
 Addon.emsPluginHandle = nil  -- populated by RegisterPlugin; nil until handshake succeeds
 local emsContextCache = "none"
 local emsLoadoutDirty = false
+-- Handshake callbacks are passed to GRIP-EMS by reference in the RegisterPlugin table
+-- (GRIP-EMS never resolves these by global name), so they stay module-local.
+local DummyAnalyzer_EMS_OnEnable, DummyAnalyzer_EMS_OnDisable
 
 local function Ems_BuildSequenceData(seqName, orderedSteps)
     -- orderedSteps: array of spell names (built by ParseSequenceLines at the Best/Next button click)
@@ -299,7 +302,7 @@ end
 -- (Ems_BuildOrderedFromSeqText and Ems_CacheOrdered removed: ParseSequenceLines + inline
 --  assignment in Best/Next Seq handlers covers both roles.)
 
-function DummyAnalyzer_EMS_OnEnable(handle)
+DummyAnalyzer_EMS_OnEnable = function(handle)
     -- Save the handle so Push/Copy/etc work after reload (EMS calls OnEnable directly with the handle)
     if handle then Addon.emsPluginHandle = handle end
     Ems_RegisterRegistries()
@@ -326,7 +329,7 @@ function DummyAnalyzer_EMS_OnEnable(handle)
     if Addon.debugMode then print("|cff33ff33[DummyAnalyzer EMS]|r Plugin enabled.") end
 end
 
-function DummyAnalyzer_EMS_OnDisable(_handle)
+DummyAnalyzer_EMS_OnDisable = function(_handle)
     -- EMS reverts our contributions automatically. Nothing to clean up here unless we want to.
     if Addon.debugMode then print("|cff33ff33[DummyAnalyzer EMS]|r Plugin disabled (contributions reverted by EMS).") end
 end

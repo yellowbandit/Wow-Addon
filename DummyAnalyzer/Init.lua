@@ -12,15 +12,25 @@ local FONT_BOLD = SKINS_DIR .. "AtkinsonHyperlegible-Bold.ttf"
 local MAIN_FONT = FONT
 local BOLD_FONT = FONT_BOLD
 
+Addon.debugLevel = 0
 Addon.debugMode = false
+local function SetDebugLevel(n)
+    n = math.max(0, math.min(3, tonumber(n) or 0))
+    Addon.debugLevel = n
+    Addon.debugMode = n > 0
+    return n
+end
+Addon.SetDebugLevel = SetDebugLevel
 
 -- Structured debug log stored in DummyAnalyzerDB for file-system inspection after /reload.
 -- I (the AI) read this from the SavedVariables file to trace runtime decisions without guessing.
 -- Levels: "error" (always), "info" (debugMode on), "debug" (debugMode on, verbose).
 local MAX_DEBUG_LOG = 500
 local function DebugLog(level, section, msg, data)
+    -- Structured debug log stored in DummyAnalyzerDB for file-system inspection after /reload.
+    local lw = (level == "error") and 0 or (level == "warn") and 1 or (level == "info") and 2 or 3
+    if lw > Addon.debugLevel then return end
     print(string.format("|cff33ff33[DBG]|r [%s][%s] %s", section, level, msg))
-    if level ~= "error" and not Addon.debugMode then return end
     local entry = {
         t = GetTime(),
         l = level,

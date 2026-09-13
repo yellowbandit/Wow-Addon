@@ -1358,10 +1358,13 @@ SlashCmdList["DUMMYDEBUG"] = function(msg)
     elseif trimmed == "clear" then
         if DummyAnalyzerDB then DummyAnalyzerDB._debugLog = {} end
         print("|cff33ff33[DummyAnalyzer]|r Debug log cleared.")
+    elseif trimmed:match("^level%s+(%d+)%s*$") then
+        local n = Addon.SetDebugLevel(trimmed:match("^level%s+(%d+)%s*$"))
+        print(string.format("|cff33ff33[DummyAnalyzer]|r Debug level %d (0=off, 1=warn, 2=info, 3=verbose).", n))
     else
-        Addon.debugMode = not Addon.debugMode
+        Addon.SetDebugLevel(Addon.debugLevel > 0 and 0 or 3)
         print("|cff33ff33[DummyAnalyzer]|r Debug mode " .. (Addon.debugMode and "|cff00ff00ENABLED" or "|cffff0000DISABLED"))
-        print("|cff33ff33[DummyAnalyzer]|r Subcommands: /dummydebug (toggle), /dummydebug dump, /dummydebug clear")
+        print("|cff33ff33[DummyAnalyzer]|r Subcommands: /dummydebug (toggle), /dummydebug level 0-3, /dummydebug dump, /dummydebug clear")
     end
 end
 

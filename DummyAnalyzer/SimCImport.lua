@@ -18,6 +18,10 @@ local BOLD_FONT = Addon.BOLD_FONT
 -- module; deferred resolution through Addon keeps the load order safe.
 local function FilterSimCData(castCounts, damageData) return Addon.FilterSimCData(castCounts, damageData) end
 
+-- MAINTAIN: SIMC_SPELL_MAP/SIMC_BUFF_MAP are hardcoded SimC action-name → display-name
+-- dictionaries. Missing entries degrade gracefully (raw SimC name is used and FilterSimCData
+-- falls back), so this is a maintenance concern, not a correctness failure. Refresh against
+-- current SimC output whenever a new expansion or patch notes change ability naming.
 local SIMC_SPELL_MAP = {
     -- Generic
     ["auto_attack"] = "Auto Attack",
