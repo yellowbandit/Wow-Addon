@@ -904,14 +904,15 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
     reasonLabel:SetTextColor(C.text[1], C.text[2], C.text[3], C.text[4])
 
     local reasonBox = CreateFrame("ScrollFrame", nil, exportDialog, "UIPanelScrollFrameTemplate")
-    reasonBox:SetPoint("TOPLEFT", reasonBar, "BOTTOMLEFT", 0, -8)
-    reasonBox:SetPoint("TOPRIGHT", reasonBar, "BOTTOMRIGHT", 0, -8)
+    reasonBox:SetPoint("BOTTOMLEFT", reasonBar, "TOPLEFT", 0, 8)
+    reasonBox:SetPoint("BOTTOMRIGHT", reasonBar, "TOPRIGHT", 0, 8)
     reasonBox:SetHeight(210)
     local reasonEdit = CreateFrame("EditBox", nil, reasonBox)
     reasonEdit:SetMultiLine(true)
     reasonEdit:SetFontObject(ChatFontNormal)
     reasonEdit:SetTextColor(0.85, 0.85, 0.85, 1)
     reasonEdit:SetWidth(600)
+    reasonEdit:SetAutoFocus(false)
     reasonEdit:EnableMouse(true)
     reasonBox:SetScrollChild(reasonEdit)
     reasonBox:Hide()
@@ -919,7 +920,15 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
     local function SetReasonExpanded(v)
         reasonExpanded = v
         if v then
-            local txt = reasoningText or "(no reasoning generated)"
+            local raw = reasoningText or ""
+            local txt
+            if raw == "" then
+                txt = "(no reasoning generated)"
+            else
+                txt = "How to read this:\n" ..
+                    "  \226\128\162 Most casts = beat SimC    \226\128\160 Fewer casts = below SimC    \226\128\157 Above/below 100% = cast more/less than target\n\n" ..
+                    raw
+            end
             reasonEdit:SetText(txt)
             local lines = 1
             for _ in string.gmatch(txt, "\n") do lines = lines + 1 end
@@ -1252,14 +1261,17 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
                     end
                     table.sort(freqItems)
                     local items = {}
-                    for _, m in ipairs(moves) do items[#items + 1] = string.format("%s moved from position %d to %d", m.name, m.from, m.to) end
+                    for _, m in ipairs(moves) do
+                        local dir = m.to < m.from and "earlier" or "later"
+                        items[#items + 1] = string.format("Moved %s %s (step %d -> %d)", m.name, dir, m.from, m.to)
+                    end
                     for _, a in ipairs(added) do items[#items + 1] = "Added " .. a end
                     for _, r in ipairs(removed) do items[#items + 1] = "Removed " .. r end
                     for _, f in ipairs(freqItems) do items[#items + 1] = f end
                     if #items > 0 then
                         local capped, ccap = {}, math.min(4, #items)
                         for i = 1, ccap do capped[i] = items[i] end
-                        diffSummary = "Changed vs previous: " .. table.concat(capped, "; ") .. (#items > ccap and (" (+" .. (#items - ccap) .. " more)") or "")
+                        diffSummary = "Changed vs your last sequence: " .. table.concat(capped, "; ") .. (#items > ccap and (" (+" .. (#items - ccap) .. " more)") or "")
                     end
                 end
             end
