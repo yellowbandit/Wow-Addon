@@ -1226,26 +1226,19 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         if nSeq then
             local macros, ordered = ParseSequenceLines(nSeq)
             -- Requirement 3: build a one-line plain-language diff vs the previous suggestion.
-            -- db5.optimizerHistory[1] is still the PRIOR entry here (the new one is inserted below).
+            -- Correct baseline = the exact on-screen sequence the user just saw: `steps`,
+            -- parsed from seqText above (order + repeats preserved). Do NOT diff against
+            -- Addon.bestSequence or optimizerHistory — both can be stale (my 4157206 check
+            -- proved this: bestSequence held a restored specimen of a DIFFERENT spec,
+            -- e.g. feral Rake/Swipe/Ferocious Bite while the user was Guardian).
             local diffSummary = nil
-            -- DR fix: the diff must compare against the sequence the user ACTUALLY last saw.
-            -- Several display paths (Best-from-comparison, SimC import, reorder, init restore)
-            -- update Addon.bestSequence WITHOUT inserting into optimizerHistory, so
-            -- optimizerHistory[1] can be a stale older suggestion. Prefer bestSequence
-            -- (orderedSpellNames = the unique base order the preview numbers 1..N), and only
-            -- fall back to optimizerHistory[1] when bestSequence is empty. GenerateSuggestedSequence
-            -- (called above) does NOT mutate priorHistory, so no insert-race here.
-            local prevMacros, prevOrder = nil, nil
-            local bsPrev = Addon.bestSequence
-            if bsPrev and type(bsPrev.orderedSpellNames) == "table" and #(bsPrev.orderedSpellNames or {}) > 0 then
-                local m2, o2 = ParseSequenceLines(bsPrev.seqText or "")
-                if o2 and #o2 > 0 then prevMacros, prevOrder = m2, o2
-                else prevOrder = bsPrev.orderedSpellNames end
-            elseif bsPrev and bsPrev.seqText and bsPrev.seqText ~= "" then
-                prevMacros, prevOrder = ParseSequenceLines(bsPrev.seqText)
-            end
-            if (not prevOrder or #prevOrder == 0) and db5 and db5.optimizerHistory and db5.optimizerHistory[1] then
-                prevMacros, prevOrder = ParseSequenceLines(db5.optimizerHistory[1].seqText or "")
+            local prevMacros = steps or {}
+            local prevOrder = {}
+            do
+                local seen = {}
+                for _, name in ipairs(prevMacros) do
+                    if name and name ~= "" and not seen[name] then seen[name] = true; prevOrder[#prevOrder + 1] = name end
+                end
             end
             DebugLog("info", "next-seq", string.format("DIFF old=[%s] new=[%s]", table.concat(prevOrder or {}, " | "), table.concat(ordered or {}, " | ")))
             if prevOrder and #prevOrder > 0 and ordered then
