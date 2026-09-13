@@ -76,22 +76,20 @@ local function BuildActionsFromFlat(orderedSpellNames, intervalMap)
     return actions
 end
 
--- Pure expansion of a base spell order + interleave map into the flat cast list that
--- GRIP-EMS weaves at runtime. Mirrors GRIP-EMS ActionCompiler._applyInterleaving: each
--- interleaved spell gains a copy AFTER every Nth original base step (k = interval,
--- 2*interval, ... <= #base). Buckets are keyed by ORIGINAL base index so stacked
--- intervals never drift each other. Uses only the intervalMap semantics, never spell
--- counts. Display-only: the pushed sequence stays the unexpanded flat list produced by
--- BuildActionsFromFlat, which GRIP-EMS expands identically, so the preview always
--- matches what Push to GRIP-EMS builds.
+-- THE single semantic definition of interleaving. Mirrors GRIP-EMS
+-- ActionCompiler._applyInterleaving exactly: each interleaved spell gains a COPY
+-- AFTER every Nth original base step (k = interval, 2*interval, ... <= #base).
+-- Buckets are keyed by ORIGINAL base index so stacked intervals never drift each other.
+-- Uses only the intervalMap semantics, never spell counts. The pushed sequence stays the
+-- unexpanded flat list produced by BuildActionsFromFlat, which GRIP-EMS expands
+-- identically, so the preview, the optimizer's scoring expansion, and the GRIP-EMS
+-- runtime always agree.
 -- @param baseOrdered array of spell names in base order (normalized internally)
 -- @param intervalMap table spell name -> interval (GRIP-EMS-emulated clamp: only a
 -- minimum of 1 is enforced like GRIP-EMS; non-positive ignored)
--- @param maxCasts number|nil maximum casts to return (defaults PREVIEW_MAX_CASTS)
+-- @param maxCasts number|nil truncation cap; nil means return the FULL expansion
 -- @return table { steps = {name,...}, truncated = boolean }
-local PREVIEW_MAX_CASTS = 20
-Addon.ExpandSequenceForPreview = function(baseOrdered, intervalMap, maxCasts)
-    maxCasts = maxCasts or PREVIEW_MAX_CASTS
+local function ExpandSequenceCore(baseOrdered, intervalMap, maxCasts)
     local base = {}
     for _, s in ipairs(baseOrdered or {}) do
         local norm = NormalizeSpellName(s)
@@ -99,36 +97,60 @@ Addon.ExpandSequenceForPreview = function(baseOrdered, intervalMap, maxCasts)
     end
     local originalCount = #base
     if originalCount == 0 then return { steps = {}, truncated = false } end
+    -- Unique interleave labels in base first-occurrence order. GRIP-EMS builds
+    -- its interleave list from the imported steps once PER ACTION (one entry per
+    -- interleaved label), never once per base occurrence - so a label that
+    -- repeats inside the base must still emit its copies only once (k=interval,
+    -- 2*interval, ... <= originalCount), or the expansion would over-insert and
+    -- drift from what the runtime weaves.
+    local labels, seen = {}, {}
+    for _, name in ipairs(base) do
+        if not seen[name] then
+            seen[name] = true
+            local iv = type(intervalMap) == "table" and intervalMap[name] or nil
+            if iv and iv > 0 then labels[#labels + 1] = name end
+        end
+    end
     local insertAfter = {}
     local totalInserted = 0
-    for _, name in ipairs(base) do
-        local iv = type(intervalMap) == "table" and intervalMap[name] or nil
-        if iv and iv > 0 then
-            -- Match GRIP-EMS exactly: clamp only the MINIMUM to 1, never cap at 50.
-            local interval = NumberOrZero(iv)
-            if interval < 1 then interval = 1 end
-            local k = interval
-            while k <= originalCount and totalInserted < 200 do
-                local bucket = insertAfter[k]
-                if not bucket then bucket = {}; insertAfter[k] = bucket end
-                bucket[#bucket + 1] = name
-                totalInserted = totalInserted + 1
-                k = k + interval
-            end
+    for _, name in ipairs(labels) do
+        -- Match GRIP-EMS exactly: clamp only the MINIMUM to 1, never cap at 50.
+        local interval = NumberOrZero(intervalMap[name])
+        if interval < 1 then interval = 1 end
+        local k = interval
+        while k <= originalCount and totalInserted < 200 do
+            local bucket = insertAfter[k]
+            if not bucket then bucket = {}; insertAfter[k] = bucket end
+            bucket[#bucket + 1] = name
+            totalInserted = totalInserted + 1
+            k = k + interval
         end
     end
     local steps = {}
     local truncated = false
     for k = 1, originalCount do
-        if #steps < maxCasts then steps[#steps + 1] = base[k] else truncated = true end
+        if maxCasts == nil or #steps < maxCasts then steps[#steps + 1] = base[k] else truncated = true end
         local bucket = insertAfter[k]
         if bucket then
             for _, name in ipairs(bucket) do
-                if #steps < maxCasts then steps[#steps + 1] = name else truncated = true end
+                if maxCasts == nil or #steps < maxCasts then steps[#steps + 1] = name else truncated = true end
             end
         end
     end
     return { steps = steps, truncated = truncated }
+end
+
+-- UI preview wrapper: caps the expansion to PREVIEW_MAX_CASTS (display only).
+local PREVIEW_MAX_CASTS = 20
+Addon.ExpandSequenceForPreview = function(baseOrdered, intervalMap, maxCasts)
+    maxCasts = maxCasts or PREVIEW_MAX_CASTS
+    return ExpandSequenceCore(baseOrdered, intervalMap, maxCasts)
+end
+
+-- Optimizer scoring wrapper: FULL expansion with no display cap, so fitness can be
+-- evaluated on the complete GRIP-EMS runtime the candidate would actually produce.
+Addon.ExpandSequenceForInterleaveScoring = function(baseOrdered, intervalMap)
+    return ExpandSequenceCore(baseOrdered, intervalMap, nil)
 end
 
 local function BuildActionsFromStructure(structure)

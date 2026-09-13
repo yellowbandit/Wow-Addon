@@ -293,45 +293,27 @@ end
 -- ============================================================
 -- INTERLEAVE SELECTOR (cfg.interleave = MAXIMUM, not a quota)
 -- ============================================================
--- Simulates the GRIP-EMS runtime cadence for a candidate: the interleaved
--- action fires every `interval` slots; every other slot is filled by the
--- remaining spells in their original relative order (cycling), preserving
--- the sequence length. This is the scoring-side mirror of what the EMS
--- pipeline's interval handling actually does at runtime.
-local function BuildInterleavedRuntime(working, interleaveName, interval)
-    local others = {}
-    for _, name in ipairs(working) do
-        if name ~= interleaveName then
-            others[#others + 1] = name
-        end
-    end
-    if #others == 0 then
-        others = { interleaveName }
-    end
-    local runtime = {}
-    local oi = 0
-    for pos = 1, #working do
-        if (pos - 1) % interval == 0 then
-            runtime[#runtime + 1] = interleaveName
-        else
-            oi = oi + 1
-            if oi > #others then oi = 1 end
-            runtime[#runtime + 1] = others[oi]
-        end
-    end
-    return runtime
-end
-
--- Selects up to cfg.interleave interleave winners. Winners are chosen
--- greedily: each pass evaluates EVERY eligible (spell, interval) pair
--- against the CURRENT working sequence, applies the single best strictly-
--- improving pair, then re-evaluates the survivors against that new working
--- sequence. A candidate earns its place only by raising real optimizer
--- fitness; cfg.interleave is a cap, never a quota.
+-- The interleave ADDS casts: GRIP-EMS weaves a copy of the interleaved action
+-- AFTER every Nth ORIGINAL base step (see ActionCompiler._applyInterleaving /
+-- ExpandSequenceForInterleaveScoring). It never replaces base casts, so a
+-- candidate's runtime is LONGER than the base sequence. Every candidate is
+-- scored on that real expanded runtime - the same single expansion definition
+-- used by the preview and what gets pushed to GRIP-EMS - never on a
+-- length-preserving replacement model.
+-- Greedy multi-winner selection: each pass evaluates every eligible
+-- (spell, interval) pair against the CURRENT expanded runtime, applies the
+-- single best strictly-improving pair, then re-evaluates the survivors against
+-- that new expanded runtime. Multiple winners are always re-expanded through
+-- ONE combined interval map from the ORIGINAL base, so original-base-index
+-- buckets never drift when earlier winners add casts. A candidate earns its
+-- place only by strictly raising real optimizer fitness (gain > 0, no
+-- threshold, no forced winner, no quota); cfg.interleave is a cap, never a
+-- quota.
 -- Eligibility (cnt >= 2, not a long-CD) only gates consideration -- it does
 -- NOT prove an interleave is beneficial. Proving that is the fitness's job.
 -- Returns: interleaveCandidates map (name -> winning interval), possibly
--- empty. The caller's `finalSteps` is never mutated.
+-- empty. The caller's `finalSteps` is never mutated; interleaveMap remains the
+-- only persisted representation of the interleave behavior.
 local function SelectInterleaves(finalSteps, stepCounts, ctx, cfg)
     local candidates = {}
     local maxWinners = cfg and cfg.interleave and cfg.interleave > 0 and math.floor(cfg.interleave) or 0
@@ -350,24 +332,41 @@ local function SelectInterleaves(finalSteps, stepCounts, ctx, cfg)
     end
     table.sort(eligible)
 
-    local working = {}
+    -- baseWorking: ORIGINAL, unexpanded base (a copy of finalSteps, never
+    -- mutated). scoredSteps: the progressively expanded GRIP-EMS runtime each
+    -- winner produces; its fitness is the baseline the next winner must beat.
+    local baseWorking = {}
     for _, name in ipairs(finalSteps) do
-        working[#working + 1] = name
+        baseWorking[#baseWorking + 1] = name
     end
+    local scoredSteps = baseWorking
+    local scoredFitness = EvaluateFitness(scoredSteps, ctx)
+    local combinedMap = {}
 
     local nSelected = 0
+    local passRan = false
     while nSelected < maxWinners do
-        local baseline = EvaluateFitness(working, ctx)
-        local bestName, bestInterval, bestGain = nil, nil, nil
+        passRan = true
+        local bestName, bestInterval, bestGain, bestExpanded, bestFitness = nil, nil, nil, nil, nil
         for _, cand in ipairs(eligible) do
             local cnt = stepCounts[cand] or 1
-            -- Valid interval candidates for this spell: 2 through roughly the
-            -- cadence implied by its copy share, capped to the sequence length.
-            local maxInterval = math.max(2, math.min(#working, math.floor(#finalSteps / cnt) + 2))
+            -- Valid interval candidates: 2 through roughly the cadence implied
+            -- by its copy share, capped to the ORIGINAL base length so the
+            -- sweep bound never drifts as earlier winners add casts.
+            local maxInterval = math.max(2, math.min(#baseWorking, math.floor(#finalSteps / cnt) + 2))
             for interval = 2, maxInterval do
-                local gain = EvaluateFitness(BuildInterleavedRuntime(working, cand, interval), ctx) - baseline
+                -- Trial map = committed winners + THIS candidate only. Never
+                -- mutate combinedMap mid-sweep: a stale interval left behind by
+                -- a sibling candidate would silently change ITS expansion and
+                -- corrupt the gain comparison.
+                local trial = {}
+                for w, i2 in pairs(combinedMap) do trial[w] = i2 end
+                trial[cand] = interval
+                local expanded = Addon.ExpandSequenceForInterleaveScoring(baseWorking, trial).steps
+                local candFitness = EvaluateFitness(expanded, ctx)
+                local gain = candFitness - scoredFitness
                 if not bestGain or gain > bestGain then
-                    bestName, bestInterval, bestGain = cand, interval, gain
+                    bestName, bestInterval, bestGain, bestExpanded, bestFitness = cand, interval, gain, expanded, candFitness
                 end
             end
         end
@@ -378,14 +377,20 @@ local function SelectInterleaves(finalSteps, stepCounts, ctx, cfg)
         end
 
         candidates[bestName] = bestInterval
-        working = BuildInterleavedRuntime(working, bestName, bestInterval)
+        combinedMap[bestName] = bestInterval
+        scoredSteps = bestExpanded
+        scoredFitness = bestFitness
         nSelected = nSelected + 1
         local survivors = {}
         for _, name in ipairs(eligible) do
             if name ~= bestName then survivors[#survivors + 1] = name end
         end
         eligible = survivors
-        DebugLog("info", "suggest-seq", string.format("Interleave winner %d/%d: %s (interval:%d) gain=%.2f vs working baseline %.2f", nSelected, maxWinners, bestName, bestInterval, bestGain, baseline))
+        DebugLog("info", "suggest-seq", string.format("Interleave winner %d/%d: spell=%s interval=%d baselineFitness=%.2f candidateFitness=%.2f gain=%.2f baseCasts=%d expandedCasts=%d", nSelected, maxWinners, bestName, bestInterval, bestFitness - bestGain, bestFitness, bestGain, #baseWorking, #bestExpanded))
+    end
+
+    if passRan and next(candidates) == nil then
+        DebugLog("info", "suggest-seq", "Interleave: no positive-gain candidate")
     end
 
     return candidates
@@ -393,7 +398,6 @@ end
 
 Addon.SelectInterleaves = SelectInterleaves
 Addon.DebugEvaluateStepArray = EvaluateFitness
-Addon.DebugBuildInterleavedRuntime = BuildInterleavedRuntime
 
 Addon.GenerateSuggestedSequence = function(castCounts, damageData, buffUptime, duration, buffGaps, seedSteps, priorHistory, selLogIds, customJitter, stepScale, requiredSpells)
     if not castCounts or not next(castCounts) then
