@@ -1228,10 +1228,27 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
             -- Requirement 3: build a one-line plain-language diff vs the previous suggestion.
             -- db5.optimizerHistory[1] is still the PRIOR entry here (the new one is inserted below).
             local diffSummary = nil
-            local prevEntry = db5 and db5.optimizerHistory and db5.optimizerHistory[1]
-            if prevEntry and ordered then
-                local prevMacros, prevOrder = ParseSequenceLines(prevEntry.seqText or "")
-                if prevOrder and #prevOrder > 0 then
+            -- DR fix: the diff must compare against the sequence the user ACTUALLY last saw.
+            -- Several display paths (Best-from-comparison, SimC import, reorder, init restore)
+            -- update Addon.bestSequence WITHOUT inserting into optimizerHistory, so
+            -- optimizerHistory[1] can be a stale older suggestion. Prefer bestSequence
+            -- (orderedSpellNames = the unique base order the preview numbers 1..N), and only
+            -- fall back to optimizerHistory[1] when bestSequence is empty. GenerateSuggestedSequence
+            -- (called above) does NOT mutate priorHistory, so no insert-race here.
+            local prevMacros, prevOrder = nil, nil
+            local bsPrev = Addon.bestSequence
+            if bsPrev and type(bsPrev.orderedSpellNames) == "table" and #(bsPrev.orderedSpellNames or {}) > 0 then
+                local m2, o2 = ParseSequenceLines(bsPrev.seqText or "")
+                if o2 and #o2 > 0 then prevMacros, prevOrder = m2, o2
+                else prevOrder = bsPrev.orderedSpellNames end
+            elseif bsPrev and bsPrev.seqText and bsPrev.seqText ~= "" then
+                prevMacros, prevOrder = ParseSequenceLines(bsPrev.seqText)
+            end
+            if (not prevOrder or #prevOrder == 0) and db5 and db5.optimizerHistory and db5.optimizerHistory[1] then
+                prevMacros, prevOrder = ParseSequenceLines(db5.optimizerHistory[1].seqText or "")
+            end
+            DebugLog("info", "next-seq", string.format("DIFF old=[%s] new=[%s]", table.concat(prevOrder or {}, " | "), table.concat(ordered or {}, " | ")))
+            if prevOrder and #prevOrder > 0 and ordered then
                     local prevPos, newPos = {}, {}
                     for i, name in ipairs(prevOrder) do prevPos[name] = i end
                     for i, name in ipairs(ordered) do newPos[name] = i end
@@ -1271,9 +1288,8 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
                     if #items > 0 then
                         local capped, ccap = {}, math.min(4, #items)
                         for i = 1, ccap do capped[i] = items[i] end
-                        diffSummary = "Changed vs your last sequence: " .. table.concat(capped, "; ") .. (#items > ccap and (" (+" .. (#items - ccap) .. " more)") or "")
+diffSummary = "Changed vs your last sequence: " .. table.concat(capped, "; ") .. (#items > ccap and (" (+" .. (#items - ccap) .. " more)") or "")
                     end
-                end
             end
             -- Find the most recent real log to compare against
             local ctx = { logLabel = nil, id = nil }
