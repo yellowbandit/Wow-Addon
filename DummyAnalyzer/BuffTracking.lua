@@ -158,12 +158,14 @@ local function PollPlayerBuffs()
         if type(auraInfo) == "table" then
             local spellId = SafeTableGet(auraInfo, "spellId")
             local duration = SafeTableGet(auraInfo, "duration")
+            local trayOk, trayName = pcall(GetSpellName, spellId)
+            local buffName = trayOk and trayName or nil
             if ShouldTrackBuff(spellId, duration) then
-                local key = BuildBuffKey(spellId)
+                local key = BuildBuffKey(spellId, buffName)
                 if key then
                     seen[key] = true
                     if not Addon.activeBuffs[key] then
-                        Addon.activeBuffs[key] = {name = GetSpellName(spellId), activeSince = GetTime()}
+                        Addon.activeBuffs[key] = {name = buffName or "?", activeSince = GetTime()}
                         -- Record detected cast for off-GCD spells (Shield Block, Ignore Pain) that don't fire UNIT_SPELLCAST_SUCCEEDED
                         if CAST_BUFF_DURATIONS[spellId] then
                             RecordSpell(spellId)

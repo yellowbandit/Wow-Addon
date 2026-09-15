@@ -398,7 +398,24 @@ end
         local ok, err = pcall(function()
             local meterType = 0
             local petList = {}
+            -- The meter rolls each player's own pet damage INTO that player's source
+            -- entry, but for the local player we can still match the roster against
+            -- UnitGUID("pet") / UnitGUID("pet2") (Animal Companion) so only OUR pets
+            -- show up here - never other players hitting the shared dummy.
+            local ownedGuids = {}
+            local function noteOwned(guid)
+                if guid and not SameGuid(guid, Addon.playerGUID) and tostring(guid) ~= "" then
+                    ownedGuids[tostring(guid)] = true
+                end
+            end
+            local pOk1, g1 = pcall(UnitGUID, "pet")
+            local pOk2, g2 = pcall(UnitGUID, "pet2")
+            if pOk1 then noteOwned(g1) end
+            if pOk2 then noteOwned(g2) end
             local diag = { "meterAvail=" .. tostring(C_DamageMeter.IsDamageMeterAvailable() or false) }
+            diag[#diag + 1] = "ownedPetGuids=" .. tostring(next(ownedGuids) ~= nil and table.concat({next(ownedGuids)}, ",") or "none")
+            diag[#diag + 1] = "petGuid1=" .. tostring(pOk1 and (IsSecretValue(g1) and "SECRET" or tostring(g1)) or "nil")
+            diag[#diag + 1] = "petGuid2=" .. tostring(pOk2 and (IsSecretValue(g2) and "SECRET" or tostring(g2)) or "nil")
             local okSessions, sessions = pcall(C_DamageMeter.GetAvailableCombatSessions)
             diag[#diag + 1] = "sessionsOk=" .. tostring(okSessions) .. " sessions=" .. tostring(type(sessions))
             local sessionCount = 0
@@ -424,7 +441,8 @@ end
                                             local pname = SafeTableGet(pres, "name")
                                             diag[#diag + 1] = "    src: keys={" .. tostring(DiagKeys(pres, 14)) .. "} guidSecret=" .. tostring(pguid and DiagSecret(pguid)) .. " local=" .. tostring(plocal) .. " name=" .. tostring(pname and (IsSecretValue(pname) and "SECRET" or pname) or "nil")
                                             local isPlayer = plocal or SameGuid(pguid, Addon.playerGUID) or (Addon.playerName and pname and not IsSecretValue(pname) and pname == Addon.playerName)
-                                            if not isPlayer then
+                                            local isOwnedPet = not isPlayer and pguid and ownedGuids[tostring(pguid)]
+                                            if isOwnedPet then
                                                 -- Dedupe by GUID (a pet spans multiple sessions).
                                                 local existing
                                                 for _, pe in ipairs(petList) do

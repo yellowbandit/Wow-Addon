@@ -819,7 +819,7 @@ local function GenerateReportText()
         table.insert(lines, "")
     end
 
-    if next(Addon.buffUptime) and elapsed > 0 then
+    if elapsed > 0 then
         table.insert(lines, "--- Buff Uptime ---")
         local sorted = {}
         for _, buff in pairs(Addon.buffUptime) do
@@ -828,15 +828,21 @@ local function GenerateReportText()
             end
         end
         table.sort(sorted, function(a, b) return a.uptime > b.uptime end)
+        if #sorted == 0 then
+            table.insert(lines, "(no buffs tracked during this run)")
+        end
         for i, buff in ipairs(sorted) do
-            if i > 15 then break end
+            if i > 30 then break end
             local pct = (buff.uptime / elapsed) * 100
             table.insert(lines, string.format("%s: %.1f sec (%.1f%%)", buff.name, buff.uptime, pct))
+        end
+        if #sorted > 30 then
+            table.insert(lines, string.format("  (... %d more)", #sorted - 30))
         end
         table.insert(lines, "")
     end
 
-    if next(Addon.buffGaps) then
+    if elapsed > 0 then
         table.insert(lines, "--- Buff Refresh Gaps ---")
         local sorted = {}
         for key, data in pairs(Addon.buffGaps) do
@@ -850,13 +856,16 @@ local function GenerateReportText()
             table.insert(sorted, {name = data.name, maxGap = maxGap, avgGap = avg, count = #data.gaps})
         end
         table.sort(sorted, function(a, b) return a.maxGap > b.maxGap end)
+        if #sorted == 0 then
+            table.insert(lines, "(no buff refresh gaps recorded)")
+        end
         for _, entry in ipairs(sorted) do
             table.insert(lines, string.format("%s: longest %.1fs, avg %.1fs (%d gaps)", entry.name, entry.maxGap, entry.avgGap, entry.count))
         end
         table.insert(lines, "")
     end
 
-    if next(Addon.debuffUptime) and elapsed > 0 then
+    if elapsed > 0 then
         table.insert(lines, "--- Target Debuff Uptime ---")
         local sorted = {}
         for _, debuff in pairs(Addon.debuffUptime) do
@@ -865,10 +874,16 @@ local function GenerateReportText()
             end
         end
         table.sort(sorted, function(a, b) return a.uptime > b.uptime end)
+        if #sorted == 0 then
+            table.insert(lines, "(no target debuffs tracked)")
+        end
         for i, debuff in ipairs(sorted) do
-            if i > 15 then break end
+            if i > 30 then break end
             local pct = (debuff.uptime / elapsed) * 100
             table.insert(lines, string.format("%s: %.1f sec (%.1f%%)", debuff.name, debuff.uptime, pct))
+        end
+        if #sorted > 30 then
+            table.insert(lines, string.format("  (... %d more)", #sorted - 30))
         end
         table.insert(lines, "")
     end
