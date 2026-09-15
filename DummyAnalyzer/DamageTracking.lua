@@ -389,54 +389,51 @@ end
     -- ============================================
     local function CollectPetSources()
         Addon.petSources = nil
+        Addon.petSourceKeys = nil
         if not C_DamageMeter then return end
         local ok, err = pcall(function()
             local meterType = 0
-            local currentType = 1
-            local expiredType
-            if Enum and Enum.DamageMeterSessionType then
-                local okC, cv = pcall(function() return Enum.DamageMeterSessionType.Current end)
-                if okC and cv then currentType = cv end
-                local okE, ev = pcall(function() return Enum.DamageMeterSessionType.Expired end)
-                if okE and ev then expiredType = ev end
-            end
-            local sessionTypes = {}
-            if expiredType then table.insert(sessionTypes, expiredType) end
-            table.insert(sessionTypes, currentType)
-
             local petList = {}
-            for _, st in ipairs(sessionTypes) do
-                local okSession, session = pcall(C_DamageMeter.GetCombatSessionFromType, st, meterType)
-                if okSession and type(session) == "table" then
-                    local sources = SafeTableGet(session, "combatSources")
-                    if type(sources) == "table" then
-                        for _, pres in ipairs(sources) do
-                            if type(pres) == "table" then
-                                local pguid = SafeTableGet(pres, "sourceGUID")
-                                local plocal = SafeTableGet(pres, "isLocalPlayer") == true
-                                local pname = SafeTableGet(pres, "name")
-                                local isPlayer = plocal or SameGuid(pguid, Addon.playerGUID) or (Addon.playerName and pname and not IsSecretValue(pname) and pname == Addon.playerName)
-                                if not isPlayer then
-                                    -- Dedupe by GUID (a pet spans multiple sessions).
-                                    local existing
-                                    for _, pe in ipairs(petList) do
-                                        if SameGuid(pe.guid, pguid) then existing = pe break end
-                                    end
-                                    local ptotal = NumberOrZero(SafeTableGet(pres, "totalAmount"))
-                                    if existing then
-                                        existing.total = existing.total + ptotal
-                                        if not existing.keys then
-                                            existing.keys = DiagKeys(pres, 16)
-                                        end
-                                    else
-                                        petList[#petList + 1] = {
-                                            guid = tostring(pguid),
-                                            name = (pname and not IsSecretValue(pname) and tostring(pname)) or "Unknown pet",
-                                            total = ptotal,
-                                            keys = DiagKeys(pres, 16),
-                                        }
-                                        if not Addon.petSourceKeys then
-                                            Addon.petSourceKeys = DiagKeys(pres, 24)
+            local okSessions, sessions = pcall(C_DamageMeter.GetAvailableCombatSessions)
+            if okSessions and type(sessions) == "table" then
+                for _, s in ipairs(sessions) do
+                    if type(s) == "table" then
+                        local id = SafeTableGet(s, "sessionID")
+                        if id then
+                            local okSession, session = pcall(C_DamageMeter.GetCombatSessionFromID, id, meterType)
+                            if okSession and type(session) == "table" then
+                                local sources = SafeTableGet(session, "combatSources")
+                                if type(sources) == "table" then
+                                    for _, pres in ipairs(sources) do
+                                        if type(pres) == "table" then
+                                            local pguid = SafeTableGet(pres, "sourceGUID")
+                                            local plocal = SafeTableGet(pres, "isLocalPlayer") == true
+                                            local pname = SafeTableGet(pres, "name")
+                                            local isPlayer = plocal or SameGuid(pguid, Addon.playerGUID) or (Addon.playerName and pname and not IsSecretValue(pname) and pname == Addon.playerName)
+                                            if not isPlayer then
+                                                -- Dedupe by GUID (a pet spans multiple sessions).
+                                                local existing
+                                                for _, pe in ipairs(petList) do
+                                                    if SameGuid(pe.guid, pguid) then existing = pe break end
+                                                end
+                                                local ptotal = NumberOrZero(SafeTableGet(pres, "totalAmount"))
+                                                if existing then
+                                                    existing.total = existing.total + ptotal
+                                                    if not existing.keys then
+                                                        existing.keys = DiagKeys(pres, 16)
+                                                    end
+                                                else
+                                                    petList[#petList + 1] = {
+                                                        guid = tostring(pguid),
+                                                        name = (pname and not IsSecretValue(pname) and tostring(pname)) or "Unknown pet",
+                                                        total = ptotal,
+                                                        keys = DiagKeys(pres, 16),
+                                                    }
+                                                    if not Addon.petSourceKeys then
+                                                        Addon.petSourceKeys = DiagKeys(pres, 24)
+                                                    end
+                                                end
+                                            end
                                         end
                                     end
                                 end
@@ -450,6 +447,9 @@ end
         end)
         if not ok and Addon.debugMode then
             print("|cff33ff33[DummyAnalyzer Debug]|r CollectPetSources error: " .. tostring(err))
+        end
+        if Addon.debugMode then
+            print("|cff33ff33[DummyAnalyzer Debug]|r Pet sources found: " .. tostring(#(Addon.petSources or {})))
         end
     end
 
