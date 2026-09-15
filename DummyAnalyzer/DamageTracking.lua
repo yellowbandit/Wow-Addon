@@ -390,25 +390,39 @@ end
     local function CollectPetSources()
         Addon.petSources = nil
         Addon.petSourceKeys = nil
-        if not C_DamageMeter then return end
+        Addon.petSourceDiag = nil
+        if not C_DamageMeter then
+            Addon.petSourceDiag = "no C_DamageMeter"
+            return
+        end
         local ok, err = pcall(function()
             local meterType = 0
             local petList = {}
+            local diag = { "meterAvail=" .. tostring(C_DamageMeter.IsDamageMeterAvailable() or false) }
             local okSessions, sessions = pcall(C_DamageMeter.GetAvailableCombatSessions)
+            diag[#diag + 1] = "sessionsOk=" .. tostring(okSessions) .. " sessions=" .. tostring(type(sessions))
+            local sessionCount = 0
             if okSessions and type(sessions) == "table" then
+                sessionCount = #sessions
+                diag[#diag + 1] = "sessionCount=" .. tostring(sessionCount)
                 for _, s in ipairs(sessions) do
                     if type(s) == "table" then
                         local id = SafeTableGet(s, "sessionID")
+                        diag[#diag + 1] = "sid=" .. tostring(id) .. " keys={" .. tostring(DiagKeys(s, 12)) .. "}"
                         if id then
                             local okSession, session = pcall(C_DamageMeter.GetCombatSessionFromID, id, meterType)
+                            diag[#diag + 1] = "  fromID_ok=" .. tostring(okSession) .. " session=" .. tostring(type(session))
                             if okSession and type(session) == "table" then
                                 local sources = SafeTableGet(session, "combatSources")
+                                diag[#diag + 1] = "  srcKey=" .. tostring(DiagKeys(session, 20))
+                                diag[#diag + 1] = "  combatSources=" .. tostring(type(sources)) .. " n=" .. tostring(type(sources) == "table" and #sources or -1)
                                 if type(sources) == "table" then
                                     for _, pres in ipairs(sources) do
                                         if type(pres) == "table" then
                                             local pguid = SafeTableGet(pres, "sourceGUID")
                                             local plocal = SafeTableGet(pres, "isLocalPlayer") == true
                                             local pname = SafeTableGet(pres, "name")
+                                            diag[#diag + 1] = "    src: keys={" .. tostring(DiagKeys(pres, 14)) .. "} guidSecret=" .. tostring(pguid and DiagSecret(pguid)) .. " local=" .. tostring(plocal) .. " name=" .. tostring(pname and (IsSecretValue(pname) and "SECRET" or pname) or "nil")
                                             local isPlayer = plocal or SameGuid(pguid, Addon.playerGUID) or (Addon.playerName and pname and not IsSecretValue(pname) and pname == Addon.playerName)
                                             if not isPlayer then
                                                 -- Dedupe by GUID (a pet spans multiple sessions).
@@ -444,6 +458,7 @@ end
             end
             table.sort(petList, function(a, b) return b.total > a.total end)
             Addon.petSources = petList
+            Addon.petSourceDiag = table.concat(diag, "\n")
         end)
         if not ok and Addon.debugMode then
             print("|cff33ff33[DummyAnalyzer Debug]|r CollectPetSources error: " .. tostring(err))

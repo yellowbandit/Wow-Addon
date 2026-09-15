@@ -657,6 +657,12 @@ local function GenerateReportText()
         local totalPct = Addon.totalDamage > 0 and (petTotal / Addon.totalDamage) * 100 or 0
         table.insert(lines, string.format("Non-player total: %s (%.1f%% of reported damage)", ShortNum(petTotal), totalPct))
         table.insert(lines, "")
+    elseif Addon.totalDamage > 0 and Addon.petSourceDiag and Addon.petSourceDiag ~= "" then
+        table.insert(lines, "--- Pet Source Debug ---")
+        for _, dl in ipairs({strsplit("\n", Addon.petSourceDiag)}) do
+            table.insert(lines, dl)
+        end
+        table.insert(lines, "")
     end
 
     if totalCasts > 0 then
