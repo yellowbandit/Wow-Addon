@@ -83,6 +83,7 @@ local function ResetBuffTracking()
     Addon.debuffUptime = {}
     Addon.buffGaps = {}
     Addon.lastBuffExpiry = {}
+    Addon.buffPollDiag = { calls = 0, auras = 0, trackable = 0, trackDebuff = 0, pollErr = 0, debuffErr = 0 }
     Addon.spellPowerCosts = {}
 end
 
@@ -149,23 +150,29 @@ local function PollPlayerBuffs()
     if not Addon.testActive or not C_UnitAuras or not C_UnitAuras.GetUnitAuras then return end
 
     CloseExpiredTimedBuffs()
+    if Addon.buffPollDiag then Addon.buffPollDiag.calls = (Addon.buffPollDiag.calls or 0) + 1 end
     local ok, allBuffs = pcall(C_UnitAuras.GetUnitAuras, "player", "HELPFUL")
-    if not ok or type(allBuffs) ~= "table" then return end
+    if not ok or type(allBuffs) ~= "table" then
+        if Addon.buffPollDiag then Addon.buffPollDiag.pollErr = (Addon.buffPollDiag.pollErr or 0) + 1 end
+        return
+    end
 
     local seen = {}
     for i = 1, #allBuffs do
         local auraInfo = allBuffs[i]
         if type(auraInfo) == "table" then
+            if Addon.buffPollDiag then Addon.buffPollDiag.auras = (Addon.buffPollDiag.auras or 0) + 1 end
             local spellId = SafeTableGet(auraInfo, "spellId")
             local duration = SafeTableGet(auraInfo, "duration")
-            local trayOk, trayName = pcall(GetSpellName, spellId)
-            local buffName = trayOk and trayName or nil
             if ShouldTrackBuff(spellId, duration) then
-                local key = BuildBuffKey(spellId, buffName)
+                local key = BuildBuffKey(spellId)
                 if key then
+                    if Addon.buffPollDiag then Addon.buffPollDiag.trackable = (Addon.buffPollDiag.trackable or 0) + 1 end
                     seen[key] = true
                     if not Addon.activeBuffs[key] then
-                        Addon.activeBuffs[key] = {name = buffName or "?", activeSince = GetTime()}
+                        local trayOk, trayName = pcall(GetSpellName, spellId)
+                        local buffName = trayOk and trayName or "?"
+                        Addon.activeBuffs[key] = {name = buffName, activeSince = GetTime()}
                         -- Record detected cast for off-GCD spells (Shield Block, Ignore Pain) that don't fire UNIT_SPELLCAST_SUCCEEDED
                         if CAST_BUFF_DURATIONS[spellId] then
                             RecordSpell(spellId)
@@ -200,7 +207,10 @@ local function PollTargetDebuffs()
     if not existsOk or not exists then return end
 
     local ok, allDebuffs = pcall(C_UnitAuras.GetUnitAuras, "target", "HARMFUL PLAYER")
-    if not ok or type(allDebuffs) ~= "table" then return end
+    if not ok or type(allDebuffs) ~= "table" then
+        if Addon.buffPollDiag then Addon.buffPollDiag.debuffErr = (Addon.buffPollDiag.debuffErr or 0) + 1 end
+        return
+    end
 
     local seen = {}
     for i = 1, #allDebuffs do
@@ -211,9 +221,11 @@ local function PollTargetDebuffs()
             if spellId and not IsSecretValue(spellId) and duration and duration > 0 and duration <= MAX_TRACKED_DEBUFF_DURATION then
                 local key = BuildBuffKey(spellId)
                 if key then
+                    if Addon.buffPollDiag then Addon.buffPollDiag.trackDebuff = (Addon.buffPollDiag.trackDebuff or 0) + 1 end
                     seen[key] = true
                     if not Addon.activeDebuffs[key] then
-                        Addon.activeDebuffs[key] = {name = GetSpellName(spellId), activeSince = GetTime()}
+                        local nameOk, debuffName = pcall(GetSpellName, spellId)
+                        Addon.activeDebuffs[key] = {name = nameOk and debuffName or "?", activeSince = GetTime()}
                     end
                 end
             end

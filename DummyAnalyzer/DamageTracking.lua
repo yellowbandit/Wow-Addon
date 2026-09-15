@@ -399,23 +399,40 @@ end
             local meterType = 0
             local petList = {}
             -- The meter rolls each player's own pet damage INTO that player's source
-            -- entry, but for the local player we can still match the roster against
-            -- UnitGUID("pet") / UnitGUID("pet2") (Animal Companion) so only OUR pets
-            -- show up here - never other players hitting the shared dummy.
-            local ownedGuids = {}
-            local function noteOwned(guid)
-                if guid and not SameGuid(guid, Addon.playerGUID) and tostring(guid) ~= "" then
-                    ownedGuids[tostring(guid)] = true
+            -- entry, so the roster never lists OUR pets. Collect the owned pet GUIDs
+            -- from UnitGUID and probe GetCombatSessionSourceFromID(id, type, petGUID)
+            -- per-owned-pet so the meter's own pet block (if any) shows their totals.
+            local ownedPets = {}
+            -- UnitGUID can return a SECRET value in 12.x; pcall-tostring it into a
+            -- plain string key, or drop it (tostring on a secret value THROWS and the
+            -- whole collector pcall would abort before petSourceDiag is assigned).
+            local function GuideDisplay(guid)
+                if not guid then return nil end
+                if IsSecretValue(guid) then return "SECRET" end
+                local okG, sG = pcall(tostring, guid)
+                if okG and type(sG) == "string" and sG ~= "" then return sG end
+                return nil
+            end
+            local function OwnedPetStr(ownedPets, sGuid)
+                for i = 1, #ownedPets do
+                    if ownedPets[i].disp == sGuid then return ownedPets[i] end
                 end
+                return nil
+            end
+            local function noteOwned(rawGuid)
+                local sGuid = GuideDisplay(rawGuid)
+                if not sGuid then return end
+                ownedPets[#ownedPets + 1] = { raw = rawGuid, disp = sGuid }
             end
             local pOk1, g1 = pcall(UnitGUID, "pet")
             local pOk2, g2 = pcall(UnitGUID, "pet2")
             if pOk1 then noteOwned(g1) end
             if pOk2 then noteOwned(g2) end
             local diag = { "meterAvail=" .. tostring(C_DamageMeter.IsDamageMeterAvailable() or false) }
-            diag[#diag + 1] = "ownedPetGuids=" .. tostring(next(ownedGuids) ~= nil and table.concat({next(ownedGuids)}, ",") or "none")
-            diag[#diag + 1] = "petGuid1=" .. tostring(pOk1 and (IsSecretValue(g1) and "SECRET" or tostring(g1)) or "nil")
-            diag[#diag + 1] = "petGuid2=" .. tostring(pOk2 and (IsSecretValue(g2) and "SECRET" or tostring(g2)) or "nil")
+            diag[#diag + 1] = "ownedPetCount=" .. tostring(#ownedPets)
+            for i = 1, #ownedPets do
+                diag[#diag + 1] = "  ownedPet" .. i .. "=" .. tostring(ownedPets[i].disp)
+            end
             local okSessions, sessions = pcall(C_DamageMeter.GetAvailableCombatSessions)
             diag[#diag + 1] = "sessionsOk=" .. tostring(okSessions) .. " sessions=" .. tostring(type(sessions))
             local sessionCount = 0
@@ -429,6 +446,34 @@ end
                         if id then
                             local okSession, session = pcall(C_DamageMeter.GetCombatSessionFromID, id, meterType)
                             diag[#diag + 1] = "  fromID_ok=" .. tostring(okSession) .. " session=" .. tostring(type(session))
+                            -- Probe the meter for each OWNED pet GUID: the roster omits pets,
+                            -- but the per-source API may still resolve our pets by GUID.
+                            for i = 1, #ownedPets do
+                                local rawGuid = ownedPets[i].raw
+                                local okPS, petBlock = pcall(C_DamageMeter.GetCombatSessionSourceFromID, id, meterType, rawGuid)
+                                local pTotal = okPS and type(petBlock) == "table" and MeterSourceTotal(petBlock) or 0
+                                diag[#diag + 1] = "    petSrcFromID(" .. tostring(ownedPets[i].disp) .. ") ok=" .. tostring(okPS) .. " type=" .. tostring(type(petBlock)) .. " total=" .. tostring(pTotal)
+                                if okPS and type(petBlock) == "table" and pTotal > 0 then
+                                    local pname = SafeTableGet(petBlock, "name")
+                                    local existing
+                                    for _, pe in ipairs(petList) do
+                                        if pe.guid == ownedPets[i].disp then existing = pe break end
+                                    end
+                                    if existing then
+                                        existing.total = existing.total + pTotal
+                                    else
+                                        petList[#petList + 1] = {
+                                            guid = ownedPets[i].disp,
+                                            name = (pname and not IsSecretValue(pname) and tostring(pname)) or ("Owned pet " .. ownedPets[i].disp),
+                                            total = pTotal,
+                                            keys = DiagKeys(petBlock, 16),
+                                        }
+                                        if not Addon.petSourceKeys then
+                                            Addon.petSourceKeys = DiagKeys(petBlock, 24)
+                                        end
+                                    end
+                                end
+                            end
                             if okSession and type(session) == "table" then
                                 local sources = SafeTableGet(session, "combatSources")
                                 diag[#diag + 1] = "  srcKey=" .. tostring(DiagKeys(session, 20))
@@ -439,14 +484,15 @@ end
                                             local pguid = SafeTableGet(pres, "sourceGUID")
                                             local plocal = SafeTableGet(pres, "isLocalPlayer") == true
                                             local pname = SafeTableGet(pres, "name")
+                                            local pguidStr = pguid and GuideDisplay(pguid)
                                             diag[#diag + 1] = "    src: keys={" .. tostring(DiagKeys(pres, 14)) .. "} guidSecret=" .. tostring(pguid and DiagSecret(pguid)) .. " local=" .. tostring(plocal) .. " name=" .. tostring(pname and (IsSecretValue(pname) and "SECRET" or pname) or "nil")
                                             local isPlayer = plocal or SameGuid(pguid, Addon.playerGUID) or (Addon.playerName and pname and not IsSecretValue(pname) and pname == Addon.playerName)
-                                            local isOwnedPet = not isPlayer and pguid and ownedGuids[tostring(pguid)]
+                                            local isOwnedPet = not isPlayer and pguidStr and pguidStr ~= "SECRET" and OwnedPetStr(ownedPets, pguidStr)
                                             if isOwnedPet then
-                                                -- Dedupe by GUID (a pet spans multiple sessions).
+                                                diag[#diag + 1] = "    OWNED-PET ROSTER MATCH: " .. tostring(pguidStr)
                                                 local existing
                                                 for _, pe in ipairs(petList) do
-                                                    if SameGuid(pe.guid, pguid) then existing = pe break end
+                                                    if pe.guid == pguidStr then existing = pe break end
                                                 end
                                                 local ptotal = NumberOrZero(SafeTableGet(pres, "totalAmount"))
                                                 if existing then
@@ -456,8 +502,8 @@ end
                                                     end
                                                 else
                                                     petList[#petList + 1] = {
-                                                        guid = tostring(pguid),
-                                                        name = (pname and not IsSecretValue(pname) and tostring(pname)) or "Unknown pet",
+                                                        guid = pguidStr,
+                                                        name = (pname and not IsSecretValue(pname) and tostring(pname)) or "Owned pet",
                                                         total = ptotal,
                                                         keys = DiagKeys(pres, 16),
                                                     }
@@ -478,8 +524,11 @@ end
             Addon.petSources = petList
             Addon.petSourceDiag = table.concat(diag, "\n")
         end)
-        if not ok and Addon.debugMode then
-            print("|cff33ff33[DummyAnalyzer Debug]|r CollectPetSources error: " .. tostring(err))
+        if not ok then
+            Addon.petSourceDiag = "CollectPetSources error: " .. tostring(err)
+            if Addon.debugMode then
+                print("|cff33ff33[DummyAnalyzer Debug]|r CollectPetSources error: " .. tostring(err))
+            end
         end
         if Addon.debugMode then
             print("|cff33ff33[DummyAnalyzer Debug]|r Pet sources found: " .. tostring(#(Addon.petSources or {})))

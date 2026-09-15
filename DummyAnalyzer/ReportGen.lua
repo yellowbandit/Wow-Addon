@@ -829,7 +829,13 @@ local function GenerateReportText()
         end
         table.sort(sorted, function(a, b) return a.uptime > b.uptime end)
         if #sorted == 0 then
-            table.insert(lines, "(no buffs tracked during this run)")
+            if Addon.debugLevel and Addon.debugLevel >= 1 then
+                local pd = Addon.buffPollDiag or {}
+                table.insert(lines, string.format("(no buffs tracked — poll calls=%s auras=%s trackable=%s err=%s)",
+                    tostring(pd.calls or 0), tostring(pd.auras or 0), tostring(pd.trackable or 0), tostring(pd.pollErr or 0)))
+            else
+                table.insert(lines, "(no buffs tracked during this run)")
+            end
         end
         for i, buff in ipairs(sorted) do
             if i > 30 then break end
@@ -875,7 +881,13 @@ local function GenerateReportText()
         end
         table.sort(sorted, function(a, b) return a.uptime > b.uptime end)
         if #sorted == 0 then
-            table.insert(lines, "(no target debuffs tracked)")
+            if Addon.debugLevel and Addon.debugLevel >= 1 then
+                local pd = Addon.buffPollDiag or {}
+                table.insert(lines, string.format("(no debuffs tracked — poll calls=%s targetSeen=%s buffErr=%s",
+                    tostring(pd.calls or 0), tostring(pd.trackDebuff or 0), tostring(pd.debuffErr or 0)))
+            else
+                table.insert(lines, "(no target debuffs tracked)")
+            end
         end
         for i, debuff in ipairs(sorted) do
             if i > 30 then break end
