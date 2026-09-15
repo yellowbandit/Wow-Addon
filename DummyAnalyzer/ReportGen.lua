@@ -53,6 +53,28 @@ local function GenerateMarkdownReport(log, elapsed, totalDmg, casts, cData, dDat
         lines[#lines + 1] = ""
     end
 
+    -- Pet/guardian source split (same data as the plain-text report).
+    if Addon.petSources and #Addon.petSources > 0 then
+        lines[#lines + 1] = "## Damage Sources (non-player: pets/guardians)"
+        if Addon.petSourceKeys then
+            lines[#lines + 1] = "Source struct keys: `{" .. tostring(Addon.petSourceKeys) .. "}`"
+        end
+        lines[#lines + 1] = string.format("**Distinct non-player sources that dealt damage: %d**", #Addon.petSources)
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = "| Source | GUID | Damage | % of total |"
+        lines[#lines + 1] = "|--------|------|--------|------------|"
+        local petTotal = 0
+        for _, p in ipairs(Addon.petSources) do
+            petTotal = petTotal + NumberOrZero(p.total)
+            local pct = dmg > 0 and (NumberOrZero(p.total) / dmg) * 100 or 0
+            lines[#lines + 1] = string.format("| %s | %s | %s | %.1f%% |", p.name or "?", tostring(p.guid), ShortNum(NumberOrZero(p.total)), pct)
+        end
+        local totalPct = dmg > 0 and (petTotal / dmg) * 100 or 0
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = string.format("**Non-player total: %s (%.1f%% of reported damage)**", ShortNum(petTotal), totalPct)
+        lines[#lines + 1] = ""
+    end
+
     if cData and next(cData) then
         lines[#lines + 1] = "## Cast Breakdown"
         lines[#lines + 1] = "| Spell | Casts | % |"
@@ -184,6 +206,23 @@ function Addon.GenerateLogReportText(log)
             local pct = (spellTotal / log.totalDamage) * 100
             local displayName = #entry.name > 22 and entry.name:sub(1,19) .. "..." or entry.name
             table.insert(lines, string.format("%-22s %8s %6.1f%%", displayName, ShortNum(spellTotal), pct))
+        end
+        table.insert(lines, "")
+    end
+
+    -- Pet/guardian source split for saved logs.
+    if log.petSources and #log.petSources > 0 then
+        table.insert(lines, "--- Damage Sources (non-player: pets/guardians) ---")
+        table.insert(lines, string.format("Distinct non-player sources that dealt damage: %d", #log.petSources))
+        local sleSourceKeys = nil
+        for _, p in ipairs(log.petSources) do
+            local pTotal = NumberOrZero(p.total)
+            local pct = log.totalDamage > 0 and (pTotal / log.totalDamage) * 100 or 0
+            table.insert(lines, string.format("  %s (GUID %s): %s (%.1f%% of total)", p.name or "?", tostring(p.guid), ShortNum(pTotal), pct))
+            if not sleSourceKeys and p.keys then sleSourceKeys = p.keys end
+        end
+        if sleSourceKeys then
+            table.insert(lines, "Source struct keys: {" .. tostring(sleSourceKeys) .. "}")
         end
         table.insert(lines, "")
     end
@@ -596,6 +635,27 @@ local function GenerateReportText()
             end
             table.insert(lines, string.format("%-22s %8s %6.1f%%%s", displayName, ShortNum(spellTotal), pct, suffix))
         end
+        table.insert(lines, "")
+    end
+
+    -- Pet/guardian source split. The built-in meter's roster exposes non-player
+    -- sources (hunter pet, guardian, etc.) that never fire UNIT_SPELLCAST_SUCCEEDED
+    -- and therefore show ZERO in Cast Breakdown. Listing them by GUID lets you (or
+    -- an AI reading the report) see whether pet damage came from one pet or many.
+    if Addon.totalDamage > 0 and Addon.petSources and #Addon.petSources > 0 then
+        table.insert(lines, "--- Damage Sources (non-player: pets/guardians) ---")
+        if Addon.petSourceKeys then
+            table.insert(lines, "Source struct keys: {" .. tostring(Addon.petSourceKeys) .. "}")
+        end
+        table.insert(lines, string.format("Distinct non-player sources that dealt damage: %d", #Addon.petSources))
+        local petTotal = 0
+        for _, p in ipairs(Addon.petSources) do
+            petTotal = petTotal + NumberOrZero(p.total)
+            local pct = (NumberOrZero(p.total) / Addon.totalDamage) * 100
+            table.insert(lines, string.format("  %s (GUID %s): %s (%.1f%% of total)", p.name or "?", tostring(p.guid), ShortNum(NumberOrZero(p.total)), pct))
+        end
+        local totalPct = Addon.totalDamage > 0 and (petTotal / Addon.totalDamage) * 100 or 0
+        table.insert(lines, string.format("Non-player total: %s (%.1f%% of reported damage)", ShortNum(petTotal), totalPct))
         table.insert(lines, "")
     end
 

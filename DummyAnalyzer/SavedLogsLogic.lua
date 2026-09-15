@@ -385,6 +385,7 @@ local function SaveCurrentLog()
         talentedSpells = #talSpellsList > 0 and talSpellsList or nil,
         talentModifiedSpells = #modSpellsList > 0 and modSpellsList or nil,
         heroTalentName = (heroName and heroName ~= "") and heroName or nil,
+        petSources = Addon.petSources and DeepCopy(Addon.petSources) or nil,
     }
 
     table.insert(db.logs, 1, log)

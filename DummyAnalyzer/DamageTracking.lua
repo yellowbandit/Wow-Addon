@@ -27,6 +27,7 @@ local function ResetDamageData()
     Addon.damageData = {}
     Addon.totalDamage = 0
     Addon.damageFromEnemyFallback = false
+    Addon.petSources = nil
 end
 
 -- Amounts can live under several keys depending on the C_DamageMeter build and
@@ -254,7 +255,7 @@ local function ReadDamageMeterData()
                                             if isLocal then playerIsLocal = true end
                                             if isLocal or SameGuid(guid, Addon.playerGUID) or (Addon.playerName and srcName and not IsSecretValue(srcName) and srcName == Addon.playerName) then
                                                 playerTotal = playerTotal + NumberOrZero(SafeTableGet(src, "totalAmount"))
-                                            end
+end
                                         end
                                     end
                                 end
@@ -344,6 +345,10 @@ local function ReadDamageMeterData()
     if Addon.totalDamage == 0 then
         Addon.meterDiag = BuildMeterDiag()
     end
+    -- Pet/guardian source split runs on EVERY meter read (not just the fallback
+    -- branches above), independent of damage total. Resolved via the namespace
+    -- because CollectPetSources is declared below this function in the file.
+    Addon.CollectPetSources()
     return Addon.totalDamage > 0
 end
 
@@ -372,6 +377,80 @@ end
             return table.concat(keys, ",", 1, maxItems) .. ",..."
         end
         return table.concat(keys, ",")
+    end
+
+    -- ============================================
+    -- Pet/guardian source split. The built-in meter's session roster
+    -- (combatSources) is the only API that exposes OTHER combatants (a hunter
+    -- pet, guardian, totem, etc.) next to the player, so the per-source split
+    -- reads the roster directly rather than guessing source struct field names.
+    -- Dump the first non-player source's keys into the report so we can confirm
+    -- the struct layout in-game before trusting `totalAmount`/`name`.
+    -- ============================================
+    local function CollectPetSources()
+        Addon.petSources = nil
+        if not C_DamageMeter then return end
+        local ok, err = pcall(function()
+            local meterType = 0
+            local currentType = 1
+            local expiredType
+            if Enum and Enum.DamageMeterSessionType then
+                local okC, cv = pcall(function() return Enum.DamageMeterSessionType.Current end)
+                if okC and cv then currentType = cv end
+                local okE, ev = pcall(function() return Enum.DamageMeterSessionType.Expired end)
+                if okE and ev then expiredType = ev end
+            end
+            local sessionTypes = {}
+            if expiredType then table.insert(sessionTypes, expiredType) end
+            table.insert(sessionTypes, currentType)
+
+            local petList = {}
+            for _, st in ipairs(sessionTypes) do
+                local okSession, session = pcall(C_DamageMeter.GetCombatSessionFromType, st, meterType)
+                if okSession and type(session) == "table" then
+                    local sources = SafeTableGet(session, "combatSources")
+                    if type(sources) == "table" then
+                        for _, pres in ipairs(sources) do
+                            if type(pres) == "table" then
+                                local pguid = SafeTableGet(pres, "sourceGUID")
+                                local plocal = SafeTableGet(pres, "isLocalPlayer") == true
+                                local pname = SafeTableGet(pres, "name")
+                                local isPlayer = plocal or SameGuid(pguid, Addon.playerGUID) or (Addon.playerName and pname and not IsSecretValue(pname) and pname == Addon.playerName)
+                                if not isPlayer then
+                                    -- Dedupe by GUID (a pet spans multiple sessions).
+                                    local existing
+                                    for _, pe in ipairs(petList) do
+                                        if SameGuid(pe.guid, pguid) then existing = pe break end
+                                    end
+                                    local ptotal = NumberOrZero(SafeTableGet(pres, "totalAmount"))
+                                    if existing then
+                                        existing.total = existing.total + ptotal
+                                        if not existing.keys then
+                                            existing.keys = DiagKeys(pres, 16)
+                                        end
+                                    else
+                                        petList[#petList + 1] = {
+                                            guid = tostring(pguid),
+                                            name = (pname and not IsSecretValue(pname) and tostring(pname)) or "Unknown pet",
+                                            total = ptotal,
+                                            keys = DiagKeys(pres, 16),
+                                        }
+                                        if not Addon.petSourceKeys then
+                                            Addon.petSourceKeys = DiagKeys(pres, 24)
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            table.sort(petList, function(a, b) return b.total > a.total end)
+            Addon.petSources = petList
+        end)
+        if not ok and Addon.debugMode then
+            print("|cff33ff33[DummyAnalyzer Debug]|r CollectPetSources error: " .. tostring(err))
+        end
     end
 
  BuildMeterDiag = function()
@@ -622,3 +701,4 @@ Addon.ReadDamageMeterData = ReadDamageMeterData
 Addon.ResetMeterCapture = ResetMeterCapture
 Addon.CaptureCombatSnapshot = CaptureCombatSnapshot
 Addon.RecordSpell = RecordSpell
+Addon.CollectPetSources = CollectPetSources
