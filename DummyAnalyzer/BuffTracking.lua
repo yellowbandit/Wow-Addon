@@ -150,24 +150,28 @@ local function PollPlayerBuffs()
     if not Addon.testActive or not C_UnitAuras or not C_UnitAuras.GetUnitAuras then return end
 
     CloseExpiredTimedBuffs()
-    if Addon.buffPollDiag then Addon.buffPollDiag.calls = (Addon.buffPollDiag.calls or 0) + 1 end
+    if not Addon.buffPollDiag then Addon.buffPollDiag = { calls = 0, auras = 0, trackable = 0, trackDebuff = 0, pollErr = 0, debuffErr = 0, secret = 0, noDur = 0, overMax = 0, snap = "" } end
+    Addon.buffPollDiag.calls = (Addon.buffPollDiag.calls or 0) + 1
     local ok, allBuffs = pcall(C_UnitAuras.GetUnitAuras, "player", "HELPFUL")
     if not ok or type(allBuffs) ~= "table" then
-        if Addon.buffPollDiag then Addon.buffPollDiag.pollErr = (Addon.buffPollDiag.pollErr or 0) + 1 end
+        Addon.buffPollDiag.pollErr = (Addon.buffPollDiag.pollErr or 0) + 1
         return
     end
 
     local seen = {}
+    Addon.buffPollDiag.auras = (Addon.buffPollDiag.auras or 0) + #allBuffs
     for i = 1, #allBuffs do
         local auraInfo = allBuffs[i]
         if type(auraInfo) == "table" then
-            if Addon.buffPollDiag then Addon.buffPollDiag.auras = (Addon.buffPollDiag.auras or 0) + 1 end
-            local spellId = SafeTableGet(auraInfo, "spellId")
+            local spellId = SafeTableGet(auraInfo, "spellId") or SafeTableGet(auraInfo, "spellID")
             local duration = SafeTableGet(auraInfo, "duration")
+            if spellId and IsSecretValue(spellId) then
+                Addon.buffPollDiag.secret = (Addon.buffPollDiag.secret or 0) + 1
+            end
             if ShouldTrackBuff(spellId, duration) then
+                Addon.buffPollDiag.trackable = (Addon.buffPollDiag.trackable or 0) + 1
                 local key = BuildBuffKey(spellId)
                 if key then
-                    if Addon.buffPollDiag then Addon.buffPollDiag.trackable = (Addon.buffPollDiag.trackable or 0) + 1 end
                     seen[key] = true
                     if not Addon.activeBuffs[key] then
                         local trayOk, trayName = pcall(GetSpellName, spellId)
@@ -179,7 +183,35 @@ local function PollPlayerBuffs()
                         end
                     end
                 end
+            elseif spellId and not IsSecretValue(spellId) then
+                local plainDur = SafeNumber(duration)
+                if not plainDur or plainDur <= 0 then
+                    Addon.buffPollDiag.noDur = (Addon.buffPollDiag.noDur or 0) + 1
+                elseif plainDur > MAX_TRACKED_BUFF_DURATION then
+                    Addon.buffPollDiag.overMax = (Addon.buffPollDiag.overMax or 0) + 1
+                end
             end
+        end
+    end
+
+    -- Keep a short sample of the first few aura rows so the report can show WHY
+    -- nothing matched (secret spellId, zero/permanent duration, wrong field name).
+    if Addon.buffPollDiag.trackable == 0 and Addon.buffPollDiag.snap == "" then
+        local parts = {}
+        for i = 1, math.min(#allBuffs, 5) do
+            local ai = allBuffs[i]
+            if type(ai) == "table" then
+                local sid = SafeTableGet(ai, "spellId") or SafeTableGet(ai, "spellID")
+                local dur = SafeTableGet(ai, "duration")
+                local flags = {}
+                if not sid then table.insert(flags, "noId") end
+                if sid and IsSecretValue(sid) then table.insert(flags, "secret") end
+                if dur == nil then table.insert(flags, "noDur") elseif SafeNumber(dur) and SafeNumber(dur) <= 0 then table.insert(flags, "perm") end
+                table.insert(parts, string.format("id=%s dur=%s [%s]", tostring(sid), tostring(dur), table.concat(flags, ",")))
+            end
+        end
+        if #parts > 0 then
+            Addon.buffPollDiag.snap = table.concat(parts, " | ")
         end
     end
 
@@ -216,7 +248,7 @@ local function PollTargetDebuffs()
     for i = 1, #allDebuffs do
         local auraInfo = allDebuffs[i]
         if type(auraInfo) == "table" then
-            local spellId = SafeTableGet(auraInfo, "spellId")
+            local spellId = SafeTableGet(auraInfo, "spellId") or SafeTableGet(auraInfo, "spellID")
             local duration = SafeNumber(SafeTableGet(auraInfo, "duration"))
             if spellId and not IsSecretValue(spellId) and duration and duration > 0 and duration <= MAX_TRACKED_DEBUFF_DURATION then
                 local key = BuildBuffKey(spellId)

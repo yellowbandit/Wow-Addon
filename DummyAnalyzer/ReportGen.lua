@@ -658,9 +658,18 @@ local function GenerateReportText()
         table.insert(lines, string.format("Non-player total: %s (%.1f%% of reported damage)", ShortNum(petTotal), totalPct))
         table.insert(lines, "")
     elseif Addon.totalDamage > 0 and Addon.petSourceDiag and Addon.petSourceDiag ~= "" then
+        -- Owning a pet that dealt damage but the meter returned no per-source list.
+        -- Pet damage is already rolled into the player's Damage Breakdown above, so
+        -- keep the default note short; full session dump only at debugLevel>=2.
         table.insert(lines, "--- Pet Source Debug ---")
-        for _, dl in ipairs({strsplit("\n", Addon.petSourceDiag)}) do
-            table.insert(lines, dl)
+        if Addon.debugLevel and Addon.debugLevel >= 2 then
+            for _, dl in ipairs({strsplit("\n", Addon.petSourceDiag)}) do
+                table.insert(lines, dl)
+            end
+        else
+            table.insert(lines, "Owned pet(s) detected; the built-in meter does not expose a separate pet source,")
+            table.insert(lines, "so pet damage is included in the player's Damage Breakdown above (see pet spells).")
+            table.insert(lines, "Full per-session probe dump: /dummydebug level 2")
         end
         table.insert(lines, "")
     end
@@ -829,12 +838,12 @@ local function GenerateReportText()
         end
         table.sort(sorted, function(a, b) return a.uptime > b.uptime end)
         if #sorted == 0 then
-            if Addon.debugLevel and Addon.debugLevel >= 1 then
-                local pd = Addon.buffPollDiag or {}
-                table.insert(lines, string.format("(no buffs tracked — poll calls=%s auras=%s trackable=%s err=%s)",
-                    tostring(pd.calls or 0), tostring(pd.auras or 0), tostring(pd.trackable or 0), tostring(pd.pollErr or 0)))
-            else
-                table.insert(lines, "(no buffs tracked during this run)")
+            local pd = Addon.buffPollDiag or {}
+            table.insert(lines, string.format("(no buffs tracked — poll calls=%s auras=%s trackable=%s err=%s secret=%s noDur=%s overMax=%s)",
+                tostring(pd.calls or 0), tostring(pd.auras or 0), tostring(pd.trackable or 0),
+                tostring(pd.pollErr or 0), tostring(pd.secret or 0), tostring(pd.noDur or 0), tostring(pd.overMax or 0)))
+            if pd.snap and pd.snap ~= "" then
+                table.insert(lines, "sample auras: " .. pd.snap)
             end
         end
         for i, buff in ipairs(sorted) do
@@ -881,13 +890,9 @@ local function GenerateReportText()
         end
         table.sort(sorted, function(a, b) return a.uptime > b.uptime end)
         if #sorted == 0 then
-            if Addon.debugLevel and Addon.debugLevel >= 1 then
-                local pd = Addon.buffPollDiag or {}
-                table.insert(lines, string.format("(no debuffs tracked — poll calls=%s targetSeen=%s buffErr=%s",
-                    tostring(pd.calls or 0), tostring(pd.trackDebuff or 0), tostring(pd.debuffErr or 0)))
-            else
-                table.insert(lines, "(no target debuffs tracked)")
-            end
+            local pd = Addon.buffPollDiag or {}
+            table.insert(lines, string.format("(no debuffs tracked — poll calls=%s targetSeen=%s buffErr=%s)",
+                tostring(pd.calls or 0), tostring(pd.trackDebuff or 0), tostring(pd.debuffErr or 0)))
         end
         for i, debuff in ipairs(sorted) do
             if i > 30 then break end
