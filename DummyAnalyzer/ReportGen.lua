@@ -845,6 +845,9 @@ local function GenerateReportText()
             if pd.snap and pd.snap ~= "" then
                 table.insert(lines, "sample auras: " .. pd.snap)
             end
+            if pd.lastErr and pd.lastErr ~= "" then
+                table.insert(lines, "aura read error: " .. pd.lastErr)
+            end
         end
         for i, buff in ipairs(sorted) do
             if i > 30 then break end

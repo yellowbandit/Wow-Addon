@@ -146,14 +146,60 @@ local function StopBuff(spellId, spellName)
     Addon.activeBuffs[key] = nil
 end
 
+local function GetAuraList(unit, filter)
+    -- 12.x: the batch C_UnitAuras.GetUnitAuras result container is unusable in the
+    -- live client (secure/secret), so enumerate via the instance-ID path that the
+    -- 12.0 reference documents as the reliable iteration route, with by-index and
+    -- legacy batch fallbacks.
+    local out = {}
+    if C_UnitAuras and C_UnitAuras.GetUnitAuraInstanceIDs then
+        local ok, ids = pcall(C_UnitAuras.GetUnitAuraInstanceIDs, unit, filter)
+        if ok and type(ids) == "table" then
+            for _, id in ipairs(ids) do
+                local ok2, aura = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, unit, id)
+                if ok2 and type(aura) == "table" then
+                    out[#out + 1] = aura
+                end
+            end
+            if #out > 0 then
+                return out
+            end
+        elseif not ok and Addon.buffPollDiag then
+            local tsOk, ts = pcall(tostring, ids)
+            Addon.buffPollDiag.lastErr = Addon.buffPollDiag.lastErr or ("GetUnitAuraInstanceIDs: " .. (tsOk and tostring(ts) or "?"))
+        end
+    end
+    if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
+        local i = 1
+        while i <= 64 do
+            local ok3, aura = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, filter)
+            if not ok3 or type(aura) ~= "table" then
+                break
+            end
+            out[#out + 1] = aura
+            i = i + 1
+        end
+        if #out > 0 then
+            return out
+        end
+    end
+    if C_UnitAuras and C_UnitAuras.GetUnitAuras then
+        local ok4, auras = pcall(C_UnitAuras.GetUnitAuras, unit, filter)
+        if ok4 and type(auras) == "table" and #auras > 0 then
+            return auras
+        end
+    end
+    return nil
+end
+
 local function PollPlayerBuffs()
-    if not Addon.testActive or not C_UnitAuras or not C_UnitAuras.GetUnitAuras then return end
+    if not Addon.testActive or not C_UnitAuras then return end
 
     CloseExpiredTimedBuffs()
-    if not Addon.buffPollDiag then Addon.buffPollDiag = { calls = 0, auras = 0, trackable = 0, trackDebuff = 0, pollErr = 0, debuffErr = 0, secret = 0, noDur = 0, overMax = 0, snap = "" } end
+    if not Addon.buffPollDiag then Addon.buffPollDiag = { calls = 0, auras = 0, trackable = 0, trackDebuff = 0, pollErr = 0, debuffErr = 0, targetSeen = 0, secret = 0, noDur = 0, overMax = 0, snap = "", lastErr = "" } end
     Addon.buffPollDiag.calls = (Addon.buffPollDiag.calls or 0) + 1
-    local ok, allBuffs = pcall(C_UnitAuras.GetUnitAuras, "player", "HELPFUL")
-    if not ok or type(allBuffs) ~= "table" then
+    local allBuffs = GetAuraList("player", "HELPFUL")
+    if not allBuffs then
         Addon.buffPollDiag.pollErr = (Addon.buffPollDiag.pollErr or 0) + 1
         return
     end
@@ -234,12 +280,15 @@ local function AddDebuffUptime(key, name, seconds)
 end
 
 local function PollTargetDebuffs()
-    if not Addon.testActive or not C_UnitAuras or not C_UnitAuras.GetUnitAuras then return end
+    if not Addon.testActive or not C_UnitAuras then return end
     local existsOk, exists = pcall(UnitExists, "target")
     if not existsOk or not exists then return end
+    if Addon.buffPollDiag then
+        Addon.buffPollDiag.targetSeen = (Addon.buffPollDiag.targetSeen or 0) + 1
+    end
 
-    local ok, allDebuffs = pcall(C_UnitAuras.GetUnitAuras, "target", "HARMFUL PLAYER")
-    if not ok or type(allDebuffs) ~= "table" then
+    local allDebuffs = GetAuraList("target", "HARMFUL PLAYER")
+    if not allDebuffs then
         if Addon.buffPollDiag then Addon.buffPollDiag.debuffErr = (Addon.buffPollDiag.debuffErr or 0) + 1 end
         return
     end
