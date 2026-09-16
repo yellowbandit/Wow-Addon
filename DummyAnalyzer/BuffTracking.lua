@@ -129,10 +129,8 @@ local function RefreshTimedBuff(spellId, spellName, duration)
 end
 
 local function RecordKnownBuffCast(spellId, spellName)
-    if not spellId or IsSecretValue(spellId) then return end
-    local config = CAST_BUFF_DURATIONS[spellId]
-    if not config then return end
-    RefreshTimedBuff(spellId, config.name or spellName, config.duration)
+    -- 12.x: buff uptime tracking is unavailable (secret aura data + taint block).
+    -- Removed per user request. Kept as a no-op so existing callers keep working.
 end
 
 local function StopBuff(spellId, spellName)
@@ -146,127 +144,12 @@ local function StopBuff(spellId, spellName)
     Addon.activeBuffs[key] = nil
 end
 
-local function GetAuraList(unit, filter)
-    -- 12.x: the batch C_UnitAuras.GetUnitAuras result container is unusable in the
-    -- live client (secure/secret), so enumerate via the instance-ID path that the
-    -- 12.0 reference documents as the reliable iteration route, with by-index and
-    -- legacy batch fallbacks.
-    local out = {}
-    if C_UnitAuras and C_UnitAuras.GetUnitAuraInstanceIDs then
-        local ok, ids = pcall(C_UnitAuras.GetUnitAuraInstanceIDs, unit, filter)
-        if ok and type(ids) == "table" then
-            for _, id in ipairs(ids) do
-                local ok2, aura = pcall(C_UnitAuras.GetAuraDataByAuraInstanceID, unit, id)
-                if ok2 and type(aura) == "table" then
-                    out[#out + 1] = aura
-                end
-            end
-            if #out > 0 then
-                return out
-            end
-        elseif not ok and Addon.buffPollDiag then
-            local tsOk, ts = pcall(tostring, ids)
-            Addon.buffPollDiag.lastErr = Addon.buffPollDiag.lastErr or ("GetUnitAuraInstanceIDs: " .. (tsOk and tostring(ts) or "?"))
-        end
-    end
-    if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
-        local i = 1
-        while i <= 64 do
-            local ok3, aura = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, filter)
-            if not ok3 or type(aura) ~= "table" then
-                break
-            end
-            out[#out + 1] = aura
-            i = i + 1
-        end
-        if #out > 0 then
-            return out
-        end
-    end
-    if C_UnitAuras and C_UnitAuras.GetUnitAuras then
-        local ok4, auras = pcall(C_UnitAuras.GetUnitAuras, unit, filter)
-        if ok4 and type(auras) == "table" and #auras > 0 then
-            return auras
-        end
-    end
-    return nil
-end
+-- 12.x: aura data is secret/secure and UNREADABLE by tainted addon code in combat
+-- (GetSpellAuraSecrecy=2 ContextuallySecret + combat taint => hard block; confirmed
+-- even through securecallfunction with the 267x taint storm). Buff uptime tracking
+-- is REMOVED entirely (user decision). Pollers are no-ops; exports stay for callers.
 
 local function PollPlayerBuffs()
-    if not Addon.testActive or not C_UnitAuras then return end
-
-    CloseExpiredTimedBuffs()
-    if not Addon.buffPollDiag then Addon.buffPollDiag = { calls = 0, auras = 0, trackable = 0, trackDebuff = 0, pollErr = 0, debuffErr = 0, targetSeen = 0, secret = 0, noDur = 0, overMax = 0, snap = "", lastErr = "" } end
-    Addon.buffPollDiag.calls = (Addon.buffPollDiag.calls or 0) + 1
-    local allBuffs = GetAuraList("player", "HELPFUL")
-    if not allBuffs then
-        Addon.buffPollDiag.pollErr = (Addon.buffPollDiag.pollErr or 0) + 1
-        return
-    end
-
-    local seen = {}
-    Addon.buffPollDiag.auras = (Addon.buffPollDiag.auras or 0) + #allBuffs
-    for i = 1, #allBuffs do
-        local auraInfo = allBuffs[i]
-        if type(auraInfo) == "table" then
-            local spellId = SafeTableGet(auraInfo, "spellId") or SafeTableGet(auraInfo, "spellID")
-            local duration = SafeTableGet(auraInfo, "duration")
-            if spellId and IsSecretValue(spellId) then
-                Addon.buffPollDiag.secret = (Addon.buffPollDiag.secret or 0) + 1
-            end
-            if ShouldTrackBuff(spellId, duration) then
-                Addon.buffPollDiag.trackable = (Addon.buffPollDiag.trackable or 0) + 1
-                local key = BuildBuffKey(spellId)
-                if key then
-                    seen[key] = true
-                    if not Addon.activeBuffs[key] then
-                        local trayOk, trayName = pcall(GetSpellName, spellId)
-                        local buffName = trayOk and trayName or "?"
-                        Addon.activeBuffs[key] = {name = buffName, activeSince = GetTime()}
-                        -- Record detected cast for off-GCD spells (Shield Block, Ignore Pain) that don't fire UNIT_SPELLCAST_SUCCEEDED
-                        if CAST_BUFF_DURATIONS[spellId] then
-                            RecordSpell(spellId)
-                        end
-                    end
-                end
-            elseif spellId and not IsSecretValue(spellId) then
-                local plainDur = SafeNumber(duration)
-                if not plainDur or plainDur <= 0 then
-                    Addon.buffPollDiag.noDur = (Addon.buffPollDiag.noDur or 0) + 1
-                elseif plainDur > MAX_TRACKED_BUFF_DURATION then
-                    Addon.buffPollDiag.overMax = (Addon.buffPollDiag.overMax or 0) + 1
-                end
-            end
-        end
-    end
-
-    -- Keep a short sample of the first few aura rows so the report can show WHY
-    -- nothing matched (secret spellId, zero/permanent duration, wrong field name).
-    if Addon.buffPollDiag.trackable == 0 and Addon.buffPollDiag.snap == "" then
-        local parts = {}
-        for i = 1, math.min(#allBuffs, 5) do
-            local ai = allBuffs[i]
-            if type(ai) == "table" then
-                local sid = SafeTableGet(ai, "spellId") or SafeTableGet(ai, "spellID")
-                local dur = SafeTableGet(ai, "duration")
-                local flags = {}
-                if not sid then table.insert(flags, "noId") end
-                if sid and IsSecretValue(sid) then table.insert(flags, "secret") end
-                if dur == nil then table.insert(flags, "noDur") elseif SafeNumber(dur) and SafeNumber(dur) <= 0 then table.insert(flags, "perm") end
-                table.insert(parts, string.format("id=%s dur=%s [%s]", tostring(sid), tostring(dur), table.concat(flags, ",")))
-            end
-        end
-        if #parts > 0 then
-            Addon.buffPollDiag.snap = table.concat(parts, " | ")
-        end
-    end
-
-    for key, buff in pairs(Addon.activeBuffs) do
-        if not buff.expiresAt and not seen[key] then
-            AddBuffUptime(key, buff.name, GetTime() - buff.activeSince)
-            Addon.activeBuffs[key] = nil
-        end
-    end
 end
 
 local function AddDebuffUptime(key, name, seconds)
@@ -280,45 +163,7 @@ local function AddDebuffUptime(key, name, seconds)
 end
 
 local function PollTargetDebuffs()
-    if not Addon.testActive or not C_UnitAuras then return end
-    local existsOk, exists = pcall(UnitExists, "target")
-    if not existsOk or not exists then return end
-    if Addon.buffPollDiag then
-        Addon.buffPollDiag.targetSeen = (Addon.buffPollDiag.targetSeen or 0) + 1
-    end
-
-    local allDebuffs = GetAuraList("target", "HARMFUL PLAYER")
-    if not allDebuffs then
-        if Addon.buffPollDiag then Addon.buffPollDiag.debuffErr = (Addon.buffPollDiag.debuffErr or 0) + 1 end
-        return
-    end
-
-    local seen = {}
-    for i = 1, #allDebuffs do
-        local auraInfo = allDebuffs[i]
-        if type(auraInfo) == "table" then
-            local spellId = SafeTableGet(auraInfo, "spellId") or SafeTableGet(auraInfo, "spellID")
-            local duration = SafeNumber(SafeTableGet(auraInfo, "duration"))
-            if spellId and not IsSecretValue(spellId) and duration and duration > 0 and duration <= MAX_TRACKED_DEBUFF_DURATION then
-                local key = BuildBuffKey(spellId)
-                if key then
-                    if Addon.buffPollDiag then Addon.buffPollDiag.trackDebuff = (Addon.buffPollDiag.trackDebuff or 0) + 1 end
-                    seen[key] = true
-                    if not Addon.activeDebuffs[key] then
-                        local nameOk, debuffName = pcall(GetSpellName, spellId)
-                        Addon.activeDebuffs[key] = {name = nameOk and debuffName or "?", activeSince = GetTime()}
-                    end
-                end
-            end
-        end
-    end
-
-    for key, debuff in pairs(Addon.activeDebuffs) do
-        if not seen[key] then
-            AddDebuffUptime(key, debuff.name, GetTime() - debuff.activeSince)
-            Addon.activeDebuffs[key] = nil
-        end
-    end
+    -- 12.x: target auras are likewise secret/taint-blocked. Removed per user request.
 end
 
 local function ResetHealthFallback()

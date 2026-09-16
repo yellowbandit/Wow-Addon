@@ -657,21 +657,6 @@ local function GenerateReportText()
         local totalPct = Addon.totalDamage > 0 and (petTotal / Addon.totalDamage) * 100 or 0
         table.insert(lines, string.format("Non-player total: %s (%.1f%% of reported damage)", ShortNum(petTotal), totalPct))
         table.insert(lines, "")
-    elseif Addon.totalDamage > 0 and Addon.petSourceDiag and Addon.petSourceDiag ~= "" then
-        -- Owning a pet that dealt damage but the meter returned no per-source list.
-        -- Pet damage is already rolled into the player's Damage Breakdown above, so
-        -- keep the default note short; full session dump only at debugLevel>=2.
-        table.insert(lines, "--- Pet Source Debug ---")
-        if Addon.debugLevel and Addon.debugLevel >= 2 then
-            for _, dl in ipairs({strsplit("\n", Addon.petSourceDiag)}) do
-                table.insert(lines, dl)
-            end
-        else
-            table.insert(lines, "Owned pet(s) detected; the built-in meter does not expose a separate pet source,")
-            table.insert(lines, "so pet damage is included in the player's Damage Breakdown above (see pet spells).")
-            table.insert(lines, "Full per-session probe dump: /dummydebug level 2")
-        end
-        table.insert(lines, "")
     end
 
     if totalCasts > 0 then
@@ -824,86 +809,6 @@ local function GenerateReportText()
         end
         if totalCasts > 2000 then
             table.insert(lines, string.format("  (... %d more)", totalCasts - 2000))
-        end
-        table.insert(lines, "")
-    end
-
-    if elapsed > 0 then
-        table.insert(lines, "--- Buff Uptime ---")
-        local sorted = {}
-        for _, buff in pairs(Addon.buffUptime) do
-            if buff.uptime > 0.1 then
-                table.insert(sorted, {name = buff.name, uptime = math.min(buff.uptime, elapsed)})
-            end
-        end
-        table.sort(sorted, function(a, b) return a.uptime > b.uptime end)
-        if #sorted == 0 then
-            local pd = Addon.buffPollDiag or {}
-            table.insert(lines, string.format("(no buffs tracked — poll calls=%s auras=%s trackable=%s err=%s secret=%s noDur=%s overMax=%s)",
-                tostring(pd.calls or 0), tostring(pd.auras or 0), tostring(pd.trackable or 0),
-                tostring(pd.pollErr or 0), tostring(pd.secret or 0), tostring(pd.noDur or 0), tostring(pd.overMax or 0)))
-            if pd.snap and pd.snap ~= "" then
-                table.insert(lines, "sample auras: " .. pd.snap)
-            end
-            if pd.lastErr and pd.lastErr ~= "" then
-                table.insert(lines, "aura read error: " .. pd.lastErr)
-            end
-        end
-        for i, buff in ipairs(sorted) do
-            if i > 30 then break end
-            local pct = (buff.uptime / elapsed) * 100
-            table.insert(lines, string.format("%s: %.1f sec (%.1f%%)", buff.name, buff.uptime, pct))
-        end
-        if #sorted > 30 then
-            table.insert(lines, string.format("  (... %d more)", #sorted - 30))
-        end
-        table.insert(lines, "")
-    end
-
-    if elapsed > 0 then
-        table.insert(lines, "--- Buff Refresh Gaps ---")
-        local sorted = {}
-        for key, data in pairs(Addon.buffGaps) do
-            local total = 0
-            local maxGap = 0
-            for _, g in ipairs(data.gaps) do
-                total = total + g
-                if g > maxGap then maxGap = g end
-            end
-            local avg = #data.gaps > 0 and (total / #data.gaps) or 0
-            table.insert(sorted, {name = data.name, maxGap = maxGap, avgGap = avg, count = #data.gaps})
-        end
-        table.sort(sorted, function(a, b) return a.maxGap > b.maxGap end)
-        if #sorted == 0 then
-            table.insert(lines, "(no buff refresh gaps recorded)")
-        end
-        for _, entry in ipairs(sorted) do
-            table.insert(lines, string.format("%s: longest %.1fs, avg %.1fs (%d gaps)", entry.name, entry.maxGap, entry.avgGap, entry.count))
-        end
-        table.insert(lines, "")
-    end
-
-    if elapsed > 0 then
-        table.insert(lines, "--- Target Debuff Uptime ---")
-        local sorted = {}
-        for _, debuff in pairs(Addon.debuffUptime) do
-            if debuff.uptime > 0.1 then
-                table.insert(sorted, {name = debuff.name, uptime = math.min(debuff.uptime, elapsed)})
-            end
-        end
-        table.sort(sorted, function(a, b) return a.uptime > b.uptime end)
-        if #sorted == 0 then
-            local pd = Addon.buffPollDiag or {}
-            table.insert(lines, string.format("(no debuffs tracked — poll calls=%s targetSeen=%s buffErr=%s)",
-                tostring(pd.calls or 0), tostring(pd.trackDebuff or 0), tostring(pd.debuffErr or 0)))
-        end
-        for i, debuff in ipairs(sorted) do
-            if i > 30 then break end
-            local pct = (debuff.uptime / elapsed) * 100
-            table.insert(lines, string.format("%s: %.1f sec (%.1f%%)", debuff.name, debuff.uptime, pct))
-        end
-        if #sorted > 30 then
-            table.insert(lines, string.format("  (... %d more)", #sorted - 30))
         end
         table.insert(lines, "")
     end

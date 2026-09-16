@@ -1079,6 +1079,66 @@ SlashCmdList["DUMMYDEBUG"] = function(msg)
     elseif trimmed == "clear" then
         if DummyAnalyzerDB then DummyAnalyzerDB._debugLog = {} end
         print("|cff33ff33[DummyAnalyzer]|r Debug log cleared.")
+    elseif trimmed == "secrets" then
+        local t = "|cff33ff33[DummyAnalyzer]|r "
+        print(t .. "--- 12.x Secret Aura Diagnostics ---")
+        local mk = { 115939, 19574, 34026, 193455, 217200, 120679 }
+        local okGet, fGet = pcall(function() return C_Secrets and C_Secrets.GetSpellAuraSecrecy end)
+        local ok0, f0 = pcall(function() return C_Secrets and C_Secrets.ShouldSpellAuraBeSecret end)
+        local ok1, f1 = pcall(function() return C_Secrets and C_Secrets.ShouldAurasBeSecret end)
+        local ok2, f2 = pcall(function() return C_Secrets and C_Secrets.HasSecretRestrictions end)
+        print(t .. "GetSpellAuraSecrecy exists=" .. tostring(okGet and fGet ~= nil) .. "  ShouldSpellAuraBeSecret exists=" .. tostring(ok0 and f0 ~= nil) .. "  ShouldAurasBeSecret exists=" .. tostring(ok1 and f1 ~= nil) .. "  HasSecretRestrictions exists=" .. tostring(ok2 and f2 ~= nil))
+        for _, sid in ipairs(mk) do
+            local sName = "?"
+            local okN, nm = pcall(C_Spell.GetSpellName, sid)
+            if okN and nm then sName = tostring(nm) end
+            local lvl = "N/A"
+            if okGet and fGet then
+                local okL, lv = pcall(fGet, sid)
+                if okL then lvl = tostring(lv) end
+            end
+            local sh = "N/A"
+            if ok0 and f0 then
+                local okS, sv = pcall(f0, sid)
+                if okS then sh = tostring(sv) end
+            end
+            print(t .. string.format("spell %d (%s)  GetSpellAuraSecrecy=%s  ShouldSpellAuraBeSecret=%s", sid, sName, lvl, sh))
+        end
+        local okHR, hr = pcall(function() return C_Secrets and C_Secrets.HasSecretRestrictions end)
+        if okHR and hr then
+            local okV, hv = pcall(hr)
+            if okV then print(t .. "HasSecretRestrictions() = " .. tostring(hv)) end
+        end
+        local okT, tot = pcall(function() return C_Secrets and C_Secrets.ShouldAurasBeSecret end)
+        if okT and tot then
+            local okV, tv = pcall(tot)
+            if okV then print(t .. "ShouldAurasBeSecret() = " .. tostring(tv)) end
+        end
+        print(t .. "--- Pet probes ---")
+        for _, slot in ipairs({ "pet", "pet2" }) do
+            local exists = "?"
+            local pn = "?"
+            local okE, ev = pcall(UnitExists, slot)
+            if okE then exists = tostring(ev) end
+            if ev then
+                local okN, nm = pcall(UnitName, slot)
+                if okN and nm then pn = tostring(nm) end
+            end
+            local g = "?"
+            local okG, gv = pcall(UnitGUID, slot)
+            if okG and gv then g = tostring(gv) end
+            print(t .. string.format("%s exists=%s name=%s guid=%s", slot, exists, pn, g))
+        end
+        print(t .. "--- Meter creatureID probe (nil GUID + creatureID) ---")
+        if C_DamageMeter then
+            local okNG, nGuid = pcall(function()
+                return C_DamageMeter.GetCombatSessionSourceFromID(1, 0, nil, 165189)
+            end)
+            print(t .. "GetCombatSessionSourceFromID(1,0,nil,165189) ok=" .. tostring(okNG) .. (nGuid and (" total=" .. tostring(nGuid.totalAmount or nGuid.total or "?")) or ""))
+        else
+            print(t .. "C_DamageMeter nil")
+        end
+        print(t .. "--- done. paste output into /dummydebug dump buffer? No — copy from chat. ---")
     elseif trimmed:match("^level%s+(%d+)%s*$") then
         local n = Addon.SetDebugLevel(trimmed:match("^level%s+(%d+)%s*$"))
         print(string.format("|cff33ff33[DummyAnalyzer]|r Debug level %d (0=off, 1=warn, 2=info, 3=verbose).", n))
