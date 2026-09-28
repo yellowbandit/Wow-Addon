@@ -26,11 +26,14 @@ local CAST_BUFF_DURATIONS_LOOKUP = Addon.CAST_BUFF_DURATIONS_LOOKUP
 local function BuildFitnessContext(castCounts, damageData, buffUptime, duration, buffGaps, requiredSpells, cfg)
     local playerGUID = UnitGUID("player") or "default"
 
+    -- Spell-equivalence fold (read-time, non-destructive)
+    castCounts, damageData = Addon.FoldSpellData(castCounts, damageData)
+
     local simcData = nil
     if DummyAnalyzerDB and DummyAnalyzerDB[playerGUID] and DummyAnalyzerDB[playerGUID].simcData then
         simcData = DummyAnalyzerDB[playerGUID].simcData
     end
-    local simcCasts      = (simcData and simcData.castCounts) or {}
+    local simcCasts      = Addon.FoldSpellData((simcData and simcData.castCounts) or {})
     local simcWeights    = (simcData and simcData.spellWeights) or {}
     local simcAplOrder   = (simcData and simcData.aplOrder) or {}
     local simcBuffBenefit = (simcData and simcData.buffBenefit) or {}
@@ -1046,7 +1049,9 @@ Addon.GenerateGapReport = function(castCounts, damageData, playerDuration)
     if not simcLog then return "SimC reference log not found (ID: " .. tostring(db.simcLogId) .. ")." end
 
     -- Re-filter in case this SimC log was saved before the proc/passive filter was added
-    local simcCasts, simcDmg = FilterSimCData(simcLog.castCounts or {}, simcLog.damageData)
+    local simcCastsRaw, simcDmgRaw = FilterSimCData(simcLog.castCounts or {}, simcLog.damageData)
+    local simcCasts, simcDmg = Addon.FoldSpellData(simcCastsRaw, simcDmgRaw)
+    simcCasts = simcCasts or {}
     simcDmg = simcDmg or {}
     local simcDuration = (simcLog.duration or 1) > 0 and simcLog.duration or 1
     local playerDur = (playerDuration or 1) > 0 and playerDuration or 1

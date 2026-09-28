@@ -172,6 +172,9 @@ end
 -- ============================================
 local function IterateSequence(seqText, castCounts, damageData, duration)
     if not seqText or not castCounts or not next(castCounts) then return nil end
+    -- Spell-equivalence fold (read-time, non-destructive): map cast/report names
+    -- through user aliases before comparing against SimC expectations.
+    castCounts, damageData = Addon.FoldSpellData(castCounts, damageData)
     -- Parse unique spells in order of first occurrence
     local seen, order = {}, {}
     for line in seqText:gmatch("[^\r\n]+") do
@@ -191,6 +194,7 @@ local function IterateSequence(seqText, castCounts, damageData, duration)
                 for name, count in pairs(l.castCounts) do
                     if IsValidMacroSpell(name) then simcCasts[name] = count end
                 end
+                simcCasts = Addon.FoldSpellData(simcCasts)
                 simcDuration = l.duration or 0
                 break
             end
@@ -200,8 +204,9 @@ local function IterateSequence(seqText, castCounts, damageData, duration)
     local ratios, simcExpected = {}, {}
     local durationScale = (duration and duration > 0 and simcDuration > 0) and duration / simcDuration or 1
     for _, name in ipairs(order) do
-        local logCount = castCounts[name] or 0
-        local simcCount = simcCasts[name] or 0
+        local lname = Addon.ResolveSpellName(name)
+        local logCount = castCounts[lname] or 0
+        local simcCount = simcCasts[lname] or 0
         local expected = simcCount * durationScale
         simcExpected[name] = expected
         ratios[name] = expected > 0 and (logCount / expected) or (logCount > 0 and 999 or 1)

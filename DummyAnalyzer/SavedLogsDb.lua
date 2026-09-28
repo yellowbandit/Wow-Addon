@@ -115,6 +115,71 @@ local function BuildSpellNameCache()
 end
 
 -- ============================================
+-- SPELL EQUIVALENCE (runtime spell folding, Hindsight-style)
+-- ============================================
+-- User-defined map { [displayNameA] = displayNameB }: wherever a spell named A
+-- is compared/aggregated against SimC expectations, it folds into B first.
+-- Fold happens at READ time (never mutates saved logs) so the map stays fully
+-- reversible — change/clear it, re-import or re-test, and stored data is intact.
+local function GetSpellEquiv()
+    local db = GetCharDB()
+    if not db.settings or not db.settings.spellEquiv then return {} end
+    return db.settings.spellEquiv
+end
+
+local function ResolveSpellName(name)
+    if not name or type(name) ~= "string" then return name end
+    local equiv = GetSpellEquiv()
+    local resolved = equiv[name]
+    if resolved and type(resolved) == "string" and resolved ~= name then
+        return resolved
+    end
+    return name
+end
+
+-- Returns NEW tables (originals untouched): castCounts[folded], damageData[folded]
+-- with duplicate folded keys merged. nil-only inputs are fine.
+local function FoldSpellData(castCounts, damageData)
+    local equiv = GetSpellEquiv()
+    local hasEquiv = false
+    for _ in pairs(equiv) do hasEquiv = true break end
+    if not hasEquiv then return castCounts, damageData end
+
+    local outCasts
+    if castCounts and type(castCounts) == "table" then
+        outCasts = {}
+        for name, count in pairs(castCounts) do
+            local folded = equiv[name] or name
+            if folded ~= name then
+                outCasts[folded] = (outCasts[folded] or 0) + count
+            else
+                outCasts[name] = (outCasts[name] or 0) + count
+            end
+        end
+    end
+
+    local outDmg
+    if damageData and type(damageData) == "table" then
+        outDmg = {}
+        for name, entry in pairs(damageData) do
+            local folded = equiv[name] or name
+            local total = (type(entry) == "table" and entry.total) or entry
+            if folded ~= name then
+                local cur = outDmg[folded]
+                if not cur then cur = {total = 0} outDmg[folded] = cur end
+                cur.total = (cur.total or 0) + (total or 0)
+            else
+                local cur = outDmg[name]
+                if not cur then cur = {total = 0} outDmg[name] = cur end
+                cur.total = (cur.total or 0) + (total or 0)
+            end
+        end
+    end
+
+    return outCasts or castCounts, outDmg or damageData
+end
+
+-- ============================================
 -- SAVEDLOGSDB EXPORTS (namespace promotion, rule A/B)
 -- ============================================
 Addon.GetCharDB = GetCharDB
@@ -123,3 +188,6 @@ Addon.SafeTableGet = SafeTableGet
 Addon.SafeTableSet = SafeTableSet
 Addon.GetSpellName = GetSpellName
 Addon.BuildSpellNameCache = BuildSpellNameCache
+Addon.GetSpellEquiv = GetSpellEquiv
+Addon.ResolveSpellName = ResolveSpellName
+Addon.FoldSpellData = FoldSpellData

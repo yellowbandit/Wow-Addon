@@ -1053,6 +1053,35 @@ SlashCmdList["DUMMYANALYZER"] = function(msg)
     elseif msg == "2" then StartTest(2)
     elseif msg == "5" then StartTest(5)
     elseif msg == "stop" then StopTest()
+    elseif msg == "equiv" or msg:match("^equiv%s+") then
+        -- Spell-equivalence aliasing: /dummy equiv <a> <b> folds spell a into b
+        -- at comparison time. /dummy equiv clear wipes the map. /dummy equiv lists.
+        local db = GetCharDB()
+        if not db.settings then db.settings = {} end
+        if not db.settings.spellEquiv then db.settings.spellEquiv = {} end
+        local rest = msg:match("^equiv%s+(.*)$") or ""
+        rest = rest:match("^%s*(.-)%s*$") or ""
+        if rest == "" or rest == "list" then
+            local n = 0
+            for a, b in pairs(db.settings.spellEquiv) do
+                n = n + 1
+                print(string.format("|cff33ff33[DummyAnalyzer]|r   %s -> %s", tostring(a), tostring(b)))
+            end
+            if n == 0 then print("|cff33ff33[DummyAnalyzer]|r No spell equivalences set. Usage: /dummy equiv <actual> <canonical>") end
+        elseif rest == "clear" then
+            db.settings.spellEquiv = {}
+            print("|cff33ff33[DummyAnalyzer]|r Cleared all spell equivalences.")
+        else
+            local a, b = rest:match("^%s*(.-)%s*,(.-)%s*$")
+            if not a then a, b = rest:match("^%s*(.-)%s*->%s*(.-)%s*$") end
+            if not a then a, b = rest:match("^%s*(%S+)%s+(.-)%s*$") end
+            if not a or not b or a == "" or b == "" then
+                print("|cff33ff33[DummyAnalyzer]|r Usage: /dummy equiv <actual> <canonical>  |  /dummy equiv clear  |  /dummy equiv")
+                return
+            end
+            db.settings.spellEquiv[a] = b
+            print(string.format("|cff33ff33[DummyAnalyzer]|r Spell equivalence: '%s' will now be compared as '%s'.", a, b))
+        end
     elseif msg == "prune" then
         local keep = (GetCharDB().settings or {}).keepLogsPerSpec or 15
         local pruned = Addon.PruneOldLogs(keep)

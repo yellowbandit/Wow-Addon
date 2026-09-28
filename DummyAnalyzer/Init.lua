@@ -436,15 +436,18 @@ local function ComputeDeficitSnapshot(logSpells, simCData, duration)
     -- logSpells is { spellName = count }; simCData may carry APL counters/cpes in different schema.
     local totalActual, totalSimc = 0, 0
     local perSpellActual, perSpellSimc = {}, {}
-    for s, c in pairs(logSpells) do
+    local foldedLogSpells = Addon.FoldSpellData(logSpells)
+    for s, c in pairs(foldedLogSpells) do
         perSpellActual[s] = (perSpellActual[s] or 0) + (tonumber(c) or 0)
         totalActual = totalActual + (tonumber(c) or 0)
     end
+    local foldedSimcCasts = {}
     if type(simCData.castCounts) == "table" then
-        for s, c in pairs(simCData.castCounts) do
-            perSpellSimc[s] = (perSpellSimc[s] or 0) + (tonumber(c) or 0)
-            totalSimc = totalSimc + (tonumber(c) or 0)
-        end
+        foldedSimcCasts = Addon.FoldSpellData(simCData.castCounts)
+    end
+    for s, c in pairs(foldedSimcCasts) do
+        perSpellSimc[s] = (perSpellSimc[s] or 0) + (tonumber(c) or 0)
+        totalSimc = totalSimc + (tonumber(c) or 0)
     end
     -- Union of both spell sets, plus any from the runner-up log
     local seen = {}

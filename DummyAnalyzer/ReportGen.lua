@@ -339,6 +339,14 @@ function Addon.CompareLogs(idA, idB)
         simcCastsB, simcDmgB = FilterSimCData(logB.castCounts or {}, logB.damageData)
     end
 
+    -- Spell-equivalence fold (read-time, non-destructive)
+    simcCastsA = simcCastsA or {}
+    simcCastsB = simcCastsB or {}
+    simcDmgA = simcDmgA or {}
+    simcDmgB = simcDmgB or {}
+    simcCastsA, simcDmgA = Addon.FoldSpellData(simcCastsA, simcDmgA)
+    simcCastsB, simcDmgB = Addon.FoldSpellData(simcCastsB, simcDmgB)
+
     local function s(n)
         return ShortNum(n or 0)
     end
