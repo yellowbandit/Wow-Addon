@@ -1027,6 +1027,21 @@ Addon.GenerateReasoningText = function(castCounts, damageData)
             lines[#lines + 1] = string.format("  Talent-modified spells: %s", table.concat(modifiedInLog, ", "))
         end
     end
+    -- Spell equivalence section (only when the user has set aliases)
+    local equiv = Addon.GetSpellEquiv()
+    local aliasPairs = {}
+    for a, b in pairs(equiv) do
+        aliasPairs[#aliasPairs + 1] = string.format("  %s treated as %s", a, b)
+    end
+    if #aliasPairs > 0 then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = "=== Spell Equivalence ==="
+        lines[#lines + 1] = "User aliases active (both names count as one spell):"
+        table.sort(aliasPairs)
+        for _, l in ipairs(aliasPairs) do
+            lines[#lines + 1] = l
+        end
+    end
     return table.concat(lines, "\n")
 end
 
