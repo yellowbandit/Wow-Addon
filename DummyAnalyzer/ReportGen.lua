@@ -227,6 +227,24 @@ function Addon.GenerateLogReportText(log)
         table.insert(lines, "")
     end
 
+    -- Pet damage split for saved logs.
+    if log.petTotalDamage and log.totalDamage and log.totalDamage > 0 and log.petTotalDamage > 0 then
+        table.insert(lines, "--- Pet Damage (split by meter isPet tag) ---")
+        table.insert(lines, string.format("Pet total: %s (%.1f%% of reported damage)", ShortNum(log.petTotalDamage), (log.petTotalDamage / log.totalDamage) * 100))
+        local petSpells = {}
+        for name, d in pairs(log.petDamageData or {}) do
+            if type(d) == "table" and NumberOrZero(d.total) > 0 then
+                table.insert(petSpells, {name = name, total = NumberOrZero(d.total), hits = NumberOrZero(d.hits)})
+            end
+        end
+        table.sort(petSpells, function(a, b) return a.total > b.total end)
+        for _, ps in ipairs(petSpells) do
+            local pct = (ps.total / log.petTotalDamage) * 100
+            table.insert(lines, string.format("  %s: %s (%.1f%% of pet, %d hits)", ps.name, ShortNum(ps.total), pct, ps.hits))
+        end
+        table.insert(lines, "")
+    end
+
     if log.castCounts and next(log.castCounts) then
         table.insert(lines, "--- Cast Breakdown ---")
         local sorted = {}
@@ -664,6 +682,26 @@ local function GenerateReportText()
         end
         local totalPct = Addon.totalDamage > 0 and (petTotal / Addon.totalDamage) * 100 or 0
         table.insert(lines, string.format("Non-player total: %s (%.1f%% of reported damage)", ShortNum(petTotal), totalPct))
+        table.insert(lines, "")
+    end
+
+    -- Pet damage split (12.x meter tags pet-cast spells with isPet inside the
+    -- PLAYER's source; the meter exposes no separate pet source). Only renders
+    -- when the meter actually flagged pet-sourced spells.
+    if Addon.petTotalDamage and Addon.totalDamage > 0 and Addon.petTotalDamage > 0 then
+        table.insert(lines, "--- Pet Damage (split by meter isPet tag) ---")
+        table.insert(lines, string.format("Pet total: %s (%.1f%% of reported damage)", ShortNum(Addon.petTotalDamage), (Addon.petTotalDamage / Addon.totalDamage) * 100))
+        local petSpells = {}
+        for name, d in pairs(Addon.petDamageData or {}) do
+            if type(d) == "table" and NumberOrZero(d.total) > 0 then
+                table.insert(petSpells, {name = name, total = NumberOrZero(d.total), hits = NumberOrZero(d.hits)})
+            end
+        end
+        table.sort(petSpells, function(a, b) return a.total > b.total end)
+        for _, ps in ipairs(petSpells) do
+            local pct = (ps.total / Addon.petTotalDamage) * 100
+            table.insert(lines, string.format("  %s: %s (%.1f%% of pet, %d hits)", ps.name, ShortNum(ps.total), pct, ps.hits))
+        end
         table.insert(lines, "")
     end
 

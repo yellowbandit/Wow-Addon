@@ -370,6 +370,8 @@ local function SaveCurrentLog()
         specName = specName,
         castCounts = DeepCopy(castCounts),
         damageData = DeepCopy(Addon.damageData),
+        petDamageData = Addon.petDamageData and DeepCopy(Addon.petDamageData) or nil,
+        petTotalDamage = Addon.petTotalDamage or 0,
         spellHistory = DeepCopy(Addon.spellHistory),
         buffUptime = DeepCopy(Addon.buffUptime),
         debuffUptime = DeepCopy(Addon.debuffUptime),

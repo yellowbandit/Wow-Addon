@@ -25,6 +25,8 @@ local combatSnapValid = false
 
 local function ResetDamageData()
     Addon.damageData = {}
+    Addon.petDamageData = {}
+    Addon.petTotalDamage = 0
     Addon.totalDamage = 0
     Addon.damageFromEnemyFallback = false
     Addon.petSources = nil
@@ -143,16 +145,25 @@ local function AddMeterSource(block)
                 local details = SafeTableGet(spell, "combatSpellDetails")
                 local hits = 0
                 local highest = 0
+                local isPetSpell = false
                 if type(details) == "table" then
                     hits = #details
                     for _, d in ipairs(details) do
                         if type(d) == "table" then
                             local amt = NumberOrZero(SafeTableGet(d, "amount"))
                             if amt > highest then highest = amt end
+                            -- 12.x meter tags pet-cast spells with isPet on the
+                            -- combatSpellDetails rows; fold a whole spell row to
+                            -- the pet bucket if any hit is pet-sourced.
+                            if SafeTableGet(d, "isPet") == true then isPetSpell = true end
                         end
                     end
                 end
-                local existing = Addon.damageData[name]
+                local target = isPetSpell and Addon.petDamageData or Addon.damageData
+                if isPetSpell then
+                    Addon.petTotalDamage = Addon.petTotalDamage + totalAmt
+                end
+                local existing = target[name]
                 if existing then
                     existing.total = (existing.total or 0) + totalAmt
                     existing.hits = (existing.hits or 0) + hits
@@ -160,7 +171,7 @@ local function AddMeterSource(block)
                     existing.aps = (existing.aps or 0) + aps
                     existing.overkill = (existing.overkill or 0) + overkill
                 else
-                    Addon.damageData[name] = {
+                    target[name] = {
                         total = totalAmt,
                         hits = hits,
                         highest = highest,
