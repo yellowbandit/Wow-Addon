@@ -21,6 +21,8 @@ local BuildMeterDiag
 -- the snapshot fallback (a real bug found after the split).
 local combatSnapTotal = 0
 local combatSnapData = {}
+local combatSnapPetTotal = 0
+local combatSnapPetData = {}
 local combatSnapValid = false
 
 local function ResetDamageData()
@@ -311,6 +313,17 @@ end
         Addon.totalDamage = combatSnapTotal
         if Addon.debugMode then
             print("|cff33ff33[DummyAnalyzer Debug]|r Using in-combat meter snapshot: " .. ShortNum(Addon.totalDamage))
+        end
+    end
+
+    -- Pet damage split (meter isPet tag) captured by the in-combat delta path.
+    -- Additive reporting only: Addon.totalDamage already includes pet damage, so
+    -- this just exposes the pet portion for the report's split-by-pet section.
+    if combatSnapValid and combatSnapPetTotal and combatSnapPetTotal > 0 then
+        Addon.petDamageData = combatSnapPetData
+        Addon.petTotalDamage = combatSnapPetTotal
+        if Addon.debugMode then
+            print("|cff33ff33[DummyAnalyzer Debug]|r Pet damage split (snapshot): " .. ShortNum(Addon.petTotalDamage))
         end
     end
 
@@ -629,21 +642,25 @@ local function MergeMeterSpellDelta(amount, spell)
     local spellID = SafeTableGet(spell, "spellID")
     local name = GetSpellName(spellID)
     if not name then return end
-    local existing = combatSnapData[name]
     local aps = NumberOrZero(SafeTableGet(spell, "amountPerSecond"))
     local overkill = NumberOrZero(SafeTableGet(spell, "overkillAmount"))
     local details = SafeTableGet(spell, "combatSpellDetails")
     local hits = 0
     local highest = 0
+    local isPetSpell = false
     if type(details) == "table" then
         hits = #details
         for _, d in ipairs(details) do
             if type(d) == "table" then
+                if SafeTableGet(d, "isPet") == true then isPetSpell = true end
                 local amt = NumberOrZero(SafeTableGet(d, "amount"))
                 if amt > highest then highest = amt end
             end
         end
     end
+    local bucket = isPetSpell and combatSnapPetData or combatSnapData
+    local existing = bucket[name]
+    if isPetSpell then combatSnapPetTotal = combatSnapPetTotal + amount end
     if existing then
         existing.total = (existing.total or 0) + amount
         existing.hits = (existing.hits or 0) + hits
@@ -651,7 +668,7 @@ local function MergeMeterSpellDelta(amount, spell)
         existing.aps = (existing.aps or 0) + aps
         existing.overkill = (existing.overkill or 0) + overkill
     else
-        combatSnapData[name] = { total = amount, hits = hits, highest = highest, aps = aps, overkill = overkill }
+        bucket[name] = { total = amount, hits = hits, highest = highest, aps = aps, overkill = overkill }
     end
 end
 
@@ -684,6 +701,8 @@ local function ResetMeterCapture()
     meterSessionLast = {}
     combatSnapTotal = 0
     combatSnapData = {}
+    combatSnapPetTotal = 0
+    combatSnapPetData = {}
     combatSnapValid = false
 end
 

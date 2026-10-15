@@ -705,6 +705,60 @@ local function GenerateReportText()
         table.insert(lines, "")
     end
 
+    if Addon.buffUptime and next(Addon.buffUptime) and elapsed > 0 then
+        table.insert(lines, "--- Buff Uptime ---")
+        local sorted = {}
+        for _, buff in pairs(Addon.buffUptime) do
+            if buff and buff.uptime and buff.uptime > 0.1 and not IsSecretValue(buff) then
+                table.insert(sorted, {name = buff.name or "?", uptime = math.min(buff.uptime, elapsed)})
+            end
+        end
+        table.sort(sorted, function(a, b) return a.uptime > b.uptime end)
+        for i, buff in ipairs(sorted) do
+            if i > 15 then break end
+            local pct = (buff.uptime / elapsed) * 100
+            table.insert(lines, string.format("%s: %.1f sec (%.1f%%)", buff.name, buff.uptime, pct))
+        end
+        table.insert(lines, "")
+    end
+
+    if Addon.debuffUptime and next(Addon.debuffUptime) and elapsed > 0 then
+        table.insert(lines, "--- Target Debuff Uptime ---")
+        local sorted = {}
+        for _, debuff in pairs(Addon.debuffUptime) do
+            if debuff and debuff.uptime and debuff.uptime > 0.1 and not IsSecretValue(debuff) then
+                table.insert(sorted, {name = debuff.name or "?", uptime = math.min(debuff.uptime, elapsed)})
+            end
+        end
+        table.sort(sorted, function(a, b) return a.uptime > b.uptime end)
+        for i, debuff in ipairs(sorted) do
+            if i > 15 then break end
+            local pct = (debuff.uptime / elapsed) * 100
+            table.insert(lines, string.format("%s: %.1f sec (%.1f%%)", debuff.name, debuff.uptime, pct))
+        end
+        table.insert(lines, "")
+    end
+
+    if Addon.buffGaps and next(Addon.buffGaps) then
+        table.insert(lines, "--- Buff Refresh Gaps ---")
+        local sorted = {}
+        for key, data in pairs(Addon.buffGaps) do
+            local total = 0
+            local maxGap = 0
+            for _, g in ipairs(data.gaps) do
+                total = total + g
+                if g > maxGap then maxGap = g end
+            end
+            local avg = #data.gaps > 0 and (total / #data.gaps) or 0
+            table.insert(sorted, {name = data.name, maxGap = maxGap, avgGap = avg, count = #data.gaps})
+        end
+        table.sort(sorted, function(a, b) return a.maxGap > b.maxGap end)
+        for _, entry in ipairs(sorted) do
+            table.insert(lines, string.format("%s: longest %.1fs, avg %.1fs (%d gaps)", entry.name, entry.maxGap, entry.avgGap, entry.count))
+        end
+        table.insert(lines, "")
+    end
+
     if totalCasts > 0 then
         table.insert(lines, "--- Cast Breakdown ---")
         local sorted = {}
