@@ -85,6 +85,7 @@ local function ResetBuffTracking()
     Addon.lastBuffExpiry = {}
     Addon.buffPollDiag = { calls = 0, auras = 0, trackable = 0, trackDebuff = 0, pollErr = 0, debuffErr = 0 }
     Addon.spellPowerCosts = {}
+    Addon.auraInstanceMap = {}
 end
 
 local function StartBuff(spellId, spellName)
@@ -144,12 +145,12 @@ local function StopBuff(spellId, spellName)
     Addon.activeBuffs[key] = nil
 end
 
--- 12.x: aura data is secret/secure and UNREADABLE by tainted addon code in combat
--- (GetSpellAuraSecrecy=2 ContextuallySecret + combat taint => hard block; confirmed
--- even through securecallfunction with the 267x taint storm). Buff uptime tracking
--- is REMOVED entirely (user decision). Pollers are no-ops; exports stay for callers.
+-- 12.x: the C_UnitAuras QUERY APIs are secret/taint-blocked for addons in combat
+-- (GetSpellAuraSecrecy=2 ContextuallySecret + taint). Polling is dead. We instead
+-- read the UNIT_AURA *event payload* (see the tracker below), which IS readable.
 
 local function PollPlayerBuffs()
+    -- 12.x: replaced by the UNIT_AURA event-payload tracker below.
 end
 
 local function AddDebuffUptime(key, name, seconds)
@@ -163,7 +164,118 @@ local function AddDebuffUptime(key, name, seconds)
 end
 
 local function PollTargetDebuffs()
-    -- 12.x: target auras are likewise secret/taint-blocked. Removed per user request.
+    -- 12.x: replaced by the UNIT_AURA event-payload tracker below.
+end
+
+-- ============================================
+-- UNIT_AURA EVENT-PAYLOAD TRACKING (12.1.x)
+-- The query APIs are taint-blocked but the UNIT_AURA *event payload* is readable
+-- (confirmed in-game: addedAuras carries spellId/name/duration/expirationTime/
+-- isHarmful/sourceUnit). We mirror WombatLog: maintain our own auraInstanceID ->
+-- spell map and drive the existing uptime/gap structures from
+-- addedAuras / updatedAuraInstanceIDs / removedAuraInstanceIDs. No query calls.
+-- ============================================
+Addon.auraInstanceMap = Addon.auraInstanceMap or {}
+
+local function IsSecretTable(value)
+    if type(value) ~= "table" then return false end
+    local ok, secret = pcall(issecrettable, value)
+    return ok and secret == true
+end
+
+local function AuraSafe(value)
+    if value == nil or IsSecretValue(value) then return nil end
+    return value
+end
+
+local function TrackAuraAdded(unit, aura)
+    if IsSecretTable(aura) then return end
+    local instanceId = AuraSafe(aura.auraInstanceID)
+    if not instanceId then return end
+    local spellId = AuraSafe(aura.spellId)
+    local name = AuraSafe(aura.name)
+    local duration = SafeNumber(aura.duration)
+    local harmful = AuraSafe(aura.isHarmful)
+
+    if harmful then
+        if unit ~= "target" or not spellId then return end
+        if duration and duration > 0 and duration > MAX_TRACKED_DEBUFF_DURATION then return end
+        local key = BuildBuffKey(spellId, name)
+        if not key then return end
+        if not Addon.activeDebuffs[key] then
+            Addon.activeDebuffs[key] = {name = name or key, activeSince = GetTime()}
+        end
+        Addon.auraInstanceMap[instanceId] = {key = key, spellId = spellId, name = name, harmful = true}
+    else
+        if unit ~= "player" and unit ~= "pet" then return end
+        if not ShouldTrackBuff(spellId, duration) then return end
+        RefreshTimedBuff(spellId, name, duration or 0)
+        local key = BuildBuffKey(spellId, name)
+        if key then
+            Addon.auraInstanceMap[instanceId] = {key = key, spellId = spellId, name = name, duration = duration, harmful = false}
+        end
+    end
+end
+
+local function TrackAuraUpdated(instanceId)
+    instanceId = AuraSafe(instanceId)
+    if not instanceId then return end
+    local entry = Addon.auraInstanceMap[instanceId]
+    if not entry or entry.harmful then return end
+    if entry.duration and entry.duration > 0 then
+        RefreshTimedBuff(entry.spellId, entry.name, entry.duration)
+    end
+end
+
+local function TrackAuraRemoved(instanceId)
+    instanceId = AuraSafe(instanceId)
+    if not instanceId then return end
+    local entry = Addon.auraInstanceMap[instanceId]
+    if not entry then return end
+    Addon.auraInstanceMap[instanceId] = nil
+    if entry.harmful then
+        local debuff = Addon.activeDebuffs[entry.key]
+        if debuff then
+            AddDebuffUptime(entry.key, entry.name or debuff.name, GetTime() - debuff.activeSince)
+            Addon.activeDebuffs[entry.key] = nil
+        end
+    else
+        StopBuff(entry.spellId, entry.name)
+    end
+end
+
+local function OnUnitAuraEvent(_, unit, info)
+    if not Addon.testActive then return end
+    if type(info) ~= "table" or IsSecretTable(info) then return end
+    local u = AuraSafe(unit)
+    if not u then return end
+
+    local added = info.addedAuras
+    if not IsSecretTable(added) then
+        for _, aura in ipairs(added or {}) do
+            TrackAuraAdded(u, aura)
+        end
+    end
+
+    local updated = info.updatedAuraInstanceIDs
+    if not IsSecretTable(updated) then
+        for _, id in ipairs(updated or {}) do
+            TrackAuraUpdated(id)
+        end
+    end
+
+    local removed = info.removedAuraInstanceIDs
+    if not IsSecretTable(removed) then
+        for _, id in ipairs(removed or {}) do
+            TrackAuraRemoved(id)
+        end
+    end
+end
+
+local auraEventFrame = CreateFrame("Frame")
+local auraEventRegistered = pcall(auraEventFrame.RegisterUnitEvent, auraEventFrame, "UNIT_AURA", "player", "target")
+if auraEventRegistered then
+    auraEventFrame:SetScript("OnEvent", OnUnitAuraEvent)
 end
 
 local function ResetHealthFallback()
@@ -249,6 +361,7 @@ local function FinalizeBuffTracking()
         AddDebuffUptime(key, debuff.name, now - debuff.activeSince)
     end
     Addon.activeDebuffs = {}
+    Addon.auraInstanceMap = {}
 end
 
 -- ============================================

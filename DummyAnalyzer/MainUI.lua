@@ -1168,13 +1168,78 @@ SlashCmdList["DUMMYDEBUG"] = function(msg)
             print(t .. "C_DamageMeter nil")
         end
         print(t .. "--- done. paste output into /dummydebug dump buffer? No — copy from chat. ---")
+    elseif trimmed == "auraevent" then
+        local t = "|cff33ff33[DummyAnalyzer]|r "
+        local function Safe(v)
+            if v == nil then return nil end
+            local okS, isSec = pcall(issecretvalue, v)
+            if okS and isSec then return nil end
+            return v
+        end
+        local function SafeTable(tbl)
+            if type(tbl) ~= "table" then return nil end
+            local okS, isSec = pcall(issecrettable, tbl)
+            if okS and isSec then return nil end
+            return tbl
+        end
+        if Addon.auraEventFrame then
+            Addon.auraEventFrame:UnregisterAllEvents()
+            Addon.auraEventFrame = nil
+            print(t .. "UNIT_AURA aura-event test STOPPED.")
+            return
+        end
+        local f = CreateFrame("Frame")
+        Addon.auraEventFrame = f
+        local okReg, regErr = pcall(f.RegisterUnitEvent, f, "UNIT_AURA", "player", "target")
+        print(t .. "UNIT_AURA event test STARTED. RegisterUnitEvent ok=" .. tostring(okReg) .. (okReg and "" or (" err=" .. tostring(regErr))))
+        print(t .. "Move near/into combat with buffs on. Run /dummydebug auraevent again to stop. Payload below:")
+        f:SetScript("OnEvent", function(_, _, unit, info)
+            local u = Safe(unit)
+            local inf = SafeTable(info)
+            if not inf then
+                print(t .. "UNIT_AURA (" .. tostring(u) .. ") info=nil/secret")
+                return
+            end
+            local full = Safe(inf.isFullUpdate)
+            local added = SafeTable(inf.addedAuras)
+            local updated = SafeTable(inf.updatedAuraInstanceIDs)
+            local removed = SafeTable(inf.removedAuraInstanceIDs)
+            local nAdd = added and #added or 0
+            local nUpd = updated and #updated or 0
+            local nRem = removed and #removed or 0
+            print(t .. string.format("UNIT_AURA unit=%s full=%s added=%d updated=%d removed=%d", tostring(u), tostring(full), nAdd, nUpd, nRem))
+            if added then
+                for i = 1, math.min(#added, 8) do
+                    local a = SafeTable(added[i])
+                    if a then
+                        print(t .. string.format("  aura[%d] id=%s spellId=%s name=%s dur=%s exp=%s harm=%s src=%s",
+                            i,
+                            tostring(Safe(a.auraInstanceID)),
+                            tostring(Safe(a.spellId)),
+                            tostring(Safe(a.name)),
+                            tostring(Safe(a.duration)),
+                            tostring(Safe(a.expirationTime)),
+                            tostring(Safe(a.isHarmful)),
+                            tostring(Safe(a.sourceUnit))))
+                    else
+                        print(t .. string.format("  aura[%d] = secret/nil", i))
+                    end
+                end
+            end
+            if removed then
+                for i = 1, math.min(#removed, 8) do
+                    print(t .. string.format("  removed[%d] id=%s", i, tostring(Safe(removed[i]))))
+                end
+            end
+        end)
+        Addon.auraEventFrame = f
     elseif trimmed:match("^level%s+(%d+)%s*$") then
         local n = Addon.SetDebugLevel(trimmed:match("^level%s+(%d+)%s*$"))
         print(string.format("|cff33ff33[DummyAnalyzer]|r Debug level %d (0=off, 1=warn, 2=info, 3=verbose).", n))
     else
         Addon.SetDebugLevel(Addon.debugLevel > 0 and 0 or 3)
         print("|cff33ff33[DummyAnalyzer]|r Debug mode " .. (Addon.debugMode and "|cff00ff00ENABLED" or "|cffff0000DISABLED"))
-        print("|cff33ff33[DummyAnalyzer]|r Subcommands: /dummydebug (toggle), /dummydebug level 0-3, /dummydebug dump, /dummydebug clear")
+        print("|cff33ff33[DummyAnalyzer]|r Subcommands: /dummydebug (toggle), /dummydebug level 0-3, /dummydebug dump, /dummydebug clear, /dummydebug secrets, /dummydebug auraevent")
     end
 end
 
