@@ -43,11 +43,37 @@ Addon.ROTATION_EXCLUDE = {
 }
 
 local _validSpellCache = {}
+
+-- WoW 12.x removed the global GetItemInfo/GetItemInfoInstant (moved into C_Item).
+-- pcall-safe shims so callers never hit "attempt to call a nil value".
+local function SafeGetItemInfoInstant(itemInfo)
+    if C_Item and C_Item.GetItemInfoInstant then
+        local ok, id = pcall(C_Item.GetItemInfoInstant, itemInfo)
+        if ok then return id end
+    end
+    if GetItemInfoInstant then
+        local ok, id = pcall(GetItemInfoInstant, itemInfo)
+        if ok then return id end
+    end
+    return nil
+end
+local function SafeGetItemInfo(itemInfo)
+    if C_Item and C_Item.GetItemInfo then
+        local ok, res = pcall(C_Item.GetItemInfo, itemInfo)
+        if ok then return res end
+    end
+    if GetItemInfo then
+        local ok, res = pcall(GetItemInfo, itemInfo)
+        if ok then return res end
+    end
+    return nil
+end
+
 local function IsValidMacroSpell(spellName)
     if not spellName then return false end
     if _validSpellCache[spellName] ~= nil then return _validSpellCache[spellName] end
     if Addon.ROTATION_EXCLUDE[spellName] then _validSpellCache[spellName] = false; return false end
-    local itemID = GetItemInfoInstant(spellName)
+    local itemID = SafeGetItemInfoInstant(spellName)
     if not itemID then
         for slot = 1, 19 do
             local link = GetInventoryItemLink("player", slot)
@@ -61,7 +87,7 @@ local function IsValidMacroSpell(spellName)
         end
     end
     if itemID then
-        local ok, info = pcall(C_Item.GetItemInfo, C_Item, itemID)
+            local ok, info = pcall(C_Item.GetItemInfo, itemID)
         if ok and info then
             -- Only on-use items (effectTrigger==0, cooldown>0) are macro-usable
             if info.effectTrigger == 0 and info.effectCooldown and info.effectCooldown > 0 then _validSpellCache[spellName] = true; return true end
@@ -91,10 +117,10 @@ end
 local function IsTrackableCast(spellName)
     if not IsValidMacroSpell(spellName) then return false end
     -- Items can be used via /use, but only if they have an on-use effect
-    if GetItemInfo(spellName) then
-        local itemID = GetItemInfoInstant(spellName)
+    if SafeGetItemInfo(spellName) then
+        local itemID = SafeGetItemInfoInstant(spellName)
         if itemID then
-            local ok, info = pcall(C_Item.GetItemInfo, C_Item, itemID)
+                local ok, info = pcall(C_Item.GetItemInfo, itemID)
             if ok and info then
                 local hasOnUse = (info.effectSpellID and info.effectSpellID > 0)
                     or (info.effectCooldown and info.effectCooldown > 0)
@@ -255,7 +281,7 @@ end
 -- Generate item step macro:       /use [combat] TrinketName
 -- Generate known-conditional:     /cast [known:AbilityName,combat] AbilityName
 local function GetActionPrefix(name)
-    if GetItemInfo(name) then return "/use" end
+    if SafeGetItemInfo(name) then return "/use" end
     return "/cast"
 end
 
