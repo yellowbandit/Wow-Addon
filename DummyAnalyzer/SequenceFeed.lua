@@ -708,6 +708,90 @@ local function ShowConfigureDialog(parent)
     dialog:Show()
 end
 
+-- Structured diff between two sequences (previous vs new). Returns a grouped
+-- multi-line string (Added / Removed / Moved / Cast frequency) or nil if there
+-- are no differences. Spell names are extracted, so callers may pass either raw
+-- macro lines or plain spell names.
+function Addon.BuildSequenceDiff(prevList, newList)
+    local function ToNames(list)
+        local out = {}
+        for _, entry in ipairs(list or {}) do
+            local n = entry
+            if type(entry) == "string" and ExtractSpellFromSeqLine then
+                n = ExtractSpellFromSeqLine(entry) or entry
+            end
+            if type(n) == "string" and n ~= "" then out[#out + 1] = n end
+        end
+        return out
+    end
+    local prevNames = ToNames(prevList)
+    local newNames = ToNames(newList)
+    local function Dedup(names)
+        local order, seen = {}, {}
+        for _, n in ipairs(names) do
+            if not seen[n] then seen[n] = true; order[#order + 1] = n end
+        end
+        return order
+    end
+    local prevOrder, newOrder = Dedup(prevNames), Dedup(newNames)
+    if #prevOrder == 0 or #newOrder == 0 then return nil end
+    local prevPos, newPos = {}, {}
+    for i, n in ipairs(prevOrder) do prevPos[n] = i end
+    for i, n in ipairs(newOrder) do newPos[n] = i end
+    local moves, added, removed = {}, {}, {}
+    for n, np in pairs(newPos) do
+        local pp = prevPos[n]
+        if pp and pp ~= np then moves[#moves + 1] = { name = n, from = pp, to = np, shift = math.abs(np - pp) } end
+        if not pp then added[#added + 1] = n end
+    end
+    for n in pairs(prevPos) do
+        if not newPos[n] then removed[#removed + 1] = n end
+    end
+    table.sort(moves, function(a, b) return a.shift > b.shift end)
+    table.sort(added)
+    table.sort(removed)
+    local function Count(names)
+        local c = {}
+        for _, n in ipairs(names) do c[n] = (c[n] or 0) + 1 end
+        return c
+    end
+    local prevCounts, newCounts = Count(prevNames), Count(newNames)
+    local freq = {}
+    for name, c in pairs(newCounts) do
+        local pc = prevCounts[name] or 0
+        if pc ~= c then freq[#freq + 1] = { name = name, from = pc, to = c } end
+    end
+    table.sort(freq, function(a, b) return a.name < b.name end)
+    if #moves == 0 and #added == 0 and #removed == 0 and #freq == 0 then return nil end
+    local parts = { "Changes vs previous sequence:" }
+    if #added > 0 then
+        parts[#parts + 1] = ""
+        parts[#parts + 1] = "Added (" .. #added .. "):"
+        for _, n in ipairs(added) do parts[#parts + 1] = "  + " .. n end
+    end
+    if #removed > 0 then
+        parts[#parts + 1] = ""
+        parts[#parts + 1] = "Removed (" .. #removed .. "):"
+        for _, n in ipairs(removed) do parts[#parts + 1] = "  - " .. n end
+    end
+    if #moves > 0 then
+        parts[#parts + 1] = ""
+        parts[#parts + 1] = "Moved (" .. #moves .. "):"
+        for _, m in ipairs(moves) do
+            local dir = m.to < m.from and "earlier" or "later"
+            parts[#parts + 1] = string.format("  %s: step %d -> %d (%s)", m.name, m.from, m.to, dir)
+        end
+    end
+    if #freq > 0 then
+        parts[#parts + 1] = ""
+        parts[#parts + 1] = "Cast frequency:"
+        for _, f in ipairs(freq) do
+            parts[#parts + 1] = string.format("  %s: %d -> %d", f.name, f.from, f.to)
+        end
+    end
+    return table.concat(parts, "\n")
+end
+
 local exportDialogRef = nil
 Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDuration, suggestMode, buffGaps, selectedLogIds)
     if exportDialogRef and exportDialogRef:IsShown() then exportDialogRef:Hide() end
@@ -922,6 +1006,53 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
     reasonBox:SetScrollChild(reasonEdit)
     reasonBox:Hide()
 
+    -- Collapsible "Changes vs previous" section (stacks above the reason section).
+    -- Hidden until a diff is actually available (SetDiffText).
+    local diffExpanded = false
+    local diffBar = CreateStyledFrame("Button", nil, exportDialog)
+    diffBar:SetHeight(26)
+    diffBar:SetBackdrop({bgFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 0})
+    diffBar:SetBackdropColor(C.btn[1], C.btn[2], C.btn[3], C.btn[4])
+    diffBar:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], C.border[4])
+    local diffLabel = diffBar:CreateFontString(nil, "OVERLAY")
+    SafeSetFont(diffLabel, BOLD_FONT, 12)
+    diffLabel:SetText("Changes vs previous  \226\150\184")
+    diffLabel:SetPoint("LEFT", diffBar, "LEFT", 10, 0)
+    diffLabel:SetTextColor(C.text[1], C.text[2], C.text[3], C.text[4])
+
+    local diffBox = CreateFrame("ScrollFrame", nil, exportDialog, "UIPanelScrollFrameTemplate")
+    diffBox:SetPoint("BOTTOMLEFT", diffBar, "TOPLEFT", 0, 8)
+    diffBox:SetPoint("BOTTOMRIGHT", diffBar, "TOPRIGHT", 0, 8)
+    diffBox:SetHeight(150)
+    local diffEdit = CreateFrame("EditBox", nil, diffBox)
+    diffEdit:SetMultiLine(true)
+    diffEdit:SetFontObject(ChatFontNormal)
+    diffEdit:SetTextColor(0.85, 0.85, 0.85, 1)
+    diffEdit:SetWidth(600)
+    diffEdit:SetAutoFocus(false)
+    diffEdit:EnableMouse(true)
+    diffBox:SetScrollChild(diffEdit)
+    diffBox:Hide()
+    diffBar:Hide()
+
+    -- Central layout: reason bar sits at y=46; the diff bar (when present) stacks
+    -- above the reason box; the preview's bottom edge sits above everything shown.
+    local function UpdateExportLayout()
+        local base = 46 + 26 + 8
+        if reasonExpanded then base = base + 210 + 8 end
+        local top
+        if diffBar:IsShown() then
+            diffBar:SetPoint("BOTTOMLEFT", exportDialog, "BOTTOMLEFT", 16, base)
+            diffBar:SetPoint("BOTTOMRIGHT", exportDialog, "BOTTOMRIGHT", -25, base)
+            top = base + 26
+            if diffExpanded then top = top + 150 + 8 end
+            top = top + 8
+        else
+            top = base
+        end
+        scrollFrame:SetPoint("BOTTOMRIGHT", exportDialog, "BOTTOMRIGHT", -25, top)
+    end
+
     local function SetReasonExpanded(v)
         reasonExpanded = v
         if v then
@@ -941,14 +1072,43 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
             reasonBox:SetVerticalScroll(0)
             reasonBox:Show()
             reasonLabel:SetText("Why this order?  \226\150\190")
-            scrollFrame:SetPoint("BOTTOMRIGHT", exportDialog, "BOTTOMRIGHT", -25, 80 + 210 + 8)
         else
             reasonBox:Hide()
             reasonLabel:SetText("Why this order?  \226\150\184")
-            scrollFrame:SetPoint("BOTTOMRIGHT", exportDialog, "BOTTOMRIGHT", -25, 80)
         end
+        UpdateExportLayout()
     end
     reasonBar:SetScript("OnClick", function() SetReasonExpanded(not reasonExpanded) end)
+
+    local function SetDiffExpanded(v)
+        diffExpanded = v
+        if v then
+            diffBox:Show()
+            diffLabel:SetText("Changes vs previous  \226\150\190")
+        else
+            diffBox:Hide()
+            diffLabel:SetText("Changes vs previous  \226\150\184")
+        end
+        UpdateExportLayout()
+    end
+    diffBar:SetScript("OnClick", function() SetDiffExpanded(not diffExpanded) end)
+
+    -- Show/hide the diff section. Passing nil/"" hides the bar entirely.
+    local function SetDiffText(txt)
+        if not txt or txt == "" then
+            if diffExpanded then SetDiffExpanded(false) end
+            diffBar:Hide()
+            UpdateExportLayout()
+            return
+        end
+        diffEdit:SetText(txt)
+        local dl = 1
+        for _ in string.gmatch(txt, "\n") do dl = dl + 1 end
+        diffEdit:SetHeight(math.max(150, dl * 14 + 20))
+        diffBox:SetVerticalScroll(0)
+        diffBar:Show()
+        UpdateExportLayout()
+    end
     local err = nil
     local seqScore = 0
     if suggestMode then
@@ -992,6 +1152,8 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         seqScore = seqScore or 0
         local macros, ordNames = ParseSequenceLines(rawSeqText)
         seqText = table.concat(macros, "\n")
+        local bestDiffText = Addon.BuildSequenceDiff(seedSteps, macros)
+        SetDiffText(bestDiffText)
         local fullStepNames = {}
         for _, m in ipairs(macros) do
             local sn = ExtractSpellFromSeqLine(m)
@@ -1001,7 +1163,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         if not Addon.bestSequence then Addon.bestSequence = {score = 0, normScore = 0} end
         if not Addon.bestSequence.normScore then Addon.bestSequence.normScore = 0 end
         if normScore > (Addon.bestSequence.normScore or 0) then
-            Addon.bestSequence = {score = seqScore, normScore = normScore, seqText = seqText, importStr = importStr, reasoningText = reasoningText, orderedSpellNames = ordNames, fullSteps = fullStepNames, interleaveMap = seqInterleave}
+            Addon.bestSequence = {score = seqScore, normScore = normScore, seqText = seqText, importStr = importStr, reasoningText = reasoningText, orderedSpellNames = ordNames, fullSteps = fullStepNames, interleaveMap = seqInterleave, diffText = bestDiffText}
         end
         Addon.lastInterleaveMap = seqInterleave
         do -- auto-push: push the CURRENTLY-DISPLAYED steps (fresh seqText-derived),
@@ -1014,7 +1176,7 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
         local persistDb = GetCharDB()
         persistDb.bestSequence = Addon.bestSequence
         if not persistDb.optimizerHistory then persistDb.optimizerHistory = {} end
-        table.insert(persistDb.optimizerHistory, 1, {timestamp = time(), score = seqScore, seqText = seqText, importStr = importStr, reasoningText = reasoningText})
+        table.insert(persistDb.optimizerHistory, 1, {timestamp = time(), score = seqScore, seqText = seqText, importStr = importStr, reasoningText = reasoningText, diffText = bestDiffText})
         if #persistDb.optimizerHistory > 20 then table.remove(persistDb.optimizerHistory) end
     else
         seqText, Addon.lastInterleaveMap = GenerateEMSSequence(castCounts, damageData, nil, buffUptime)
@@ -1289,6 +1451,8 @@ Addon.ShowExportDialog = function(castCounts, damageData, buffUptime, playerDura
 diffSummary = "Changed vs your last sequence: " .. table.concat(capped, "; ") .. (#items > ccap and (" (+" .. (#items - ccap) .. " more)") or "")
                     end
             end
+            local nextDiffText = Addon.BuildSequenceDiff(prevMacros, macros)
+            SetDiffText(nextDiffText)
             -- Find the most recent real log to compare against
             local ctx = { logLabel = nil, id = nil }
             for _, log in ipairs(db5.logs) do
@@ -1314,11 +1478,11 @@ HighlightTab(nextBtn)
                     local sn = ExtractSpellFromSeqLine(m)
                     if sn and sn ~= "" then fullStepNames[#fullStepNames + 1] = sn end
                 end
-                Addon.bestSequence = {score = nScore or 0, normScore = normS, seqText = table.concat(macros, "\n"), importStr = nImp, reasoningText = nReason, orderedSpellNames = ordered, fullSteps = fullStepNames, interleaveMap = nMap}
+                Addon.bestSequence = {score = nScore or 0, normScore = normS, seqText = table.concat(macros, "\n"), importStr = nImp, reasoningText = nReason, orderedSpellNames = ordered, fullSteps = fullStepNames, interleaveMap = nMap, diffText = nextDiffText}
             end
             db5.bestSequence = Addon.bestSequence
             if not db5.optimizerHistory then db5.optimizerHistory = {} end
-            table.insert(db5.optimizerHistory, 1, {timestamp = time(), score = nScore, seqText = nSeq, importStr = nImp, reasoningText = nReason, uniqKey = table.concat(ordered or {}, "|")})
+            table.insert(db5.optimizerHistory, 1, {timestamp = time(), score = nScore, seqText = nSeq, importStr = nImp, reasoningText = nReason, diffText = nextDiffText, uniqKey = table.concat(ordered or {}, "|")})
             if #db5.optimizerHistory > 20 then table.remove(db5.optimizerHistory) end
             print(string.format("|cff33ff33[DummyAnalyzer]|r Next sequence (score: %s)", Addon.FormatNumber(nScore or 0)))
         else
