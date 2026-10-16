@@ -872,3 +872,316 @@ Addon.ResetMeterCapture = ResetMeterCapture
 Addon.CaptureCombatSnapshot = CaptureCombatSnapshot
 Addon.RecordSpell = RecordSpell
 Addon.CollectPetSources = CollectPetSources
+
+-- Read-only accessor for the live in-combat meter snapshot total.
+-- Consumed by the Practice Overlay (TestControl.lua) to show current DPS
+-- mid-test without re-reading the meter. Secret-safe.
+Addon.GetCombatSnapTotal = function()
+    if IsSecretValue(combatSnapTotal) then return 0 end
+    return combatSnapTotal
+end
+
+-- Live current-session damage total for the local player, read straight from the
+-- meter roster (DamageMeterCombatSource.totalAmount). This is the value the
+-- Blizzard/Elle damage meters display live; the per-spell delta path
+-- (AccumulateSourceDelta) can stay empty mid-combat, so the Practice Overlay
+-- reads this instead. Returns a plain number (0 when unavailable). Secret-safe.
+local function GetLiveDamageTotal()
+    if not C_DamageMeter then return 0 end
+    local matched, allSum, count, legacyTotal, sessionTotal = 0, 0, 0, 0, 0
+    local function addRoster(session)
+        if type(session) ~= "table" then return end
+        -- Session-level live total (populated even while per-source totalAmount
+        -- is still nil mid-combat).
+        local sTotal = NumberOrZero(SafeTableGet(session, "totalAmount"))
+        if not IsSecretValue(sTotal) and sTotal > sessionTotal then sessionTotal = sTotal end
+        local sources = SafeTableGet(session, "combatSources")
+        if type(sources) ~= "table" then return end
+        for _, src in ipairs(sources) do
+            if type(src) == "table" then
+                -- MeterSourceTotal falls back through totalAmount/amount/total/
+                -- damage and finally per-spell rows, which Blizzard updates live.
+                local amt = MeterSourceTotal(src)
+                if not IsSecretValue(amt) then
+                    allSum = allSum + amt
+                    count = count + 1
+                    local guid = SafeTableGet(src, "sourceGUID")
+                    local isLocal = SafeTableGet(src, "isLocalPlayer") == true
+                    local srcName = SafeTableGet(src, "name")
+                    if isLocal or SameGuid(guid, Addon.playerGUID)
+                        or (Addon.playerName and srcName and not IsSecretValue(srcName) and srcName == Addon.playerName) then
+                        matched = matched + amt
+                    end
+                end
+            end
+        end
+    end
+
+    pcall(function()
+        -- 1) Live CURRENT session (mirrors EllesmereUIDamageMeters).
+        -- NOTE: the 2nd arg to the session APIs is the METER TYPE (not a
+        -- placeholder). Passing 0 returns a roster whose amount fields stay nil
+        -- mid-combat; the Damage-Done meter enum carries the live values.
+        local sessionType = 1
+        if Enum and Enum.DamageMeterSessionType then
+            local okC, cv = pcall(function() return Enum.DamageMeterSessionType.Current end)
+            if okC and cv then sessionType = cv end
+        end
+        local meterType = 0
+        if Enum and Enum.DamageMeterType then
+            local okD, dv = pcall(function() return Enum.DamageMeterType.DamageDone end)
+            if okD and dv then meterType = dv end
+        end
+        pcall(function()
+            local okS, session = pcall(C_DamageMeter.GetCombatSessionFromType, sessionType, meterType)
+            if okS then addRoster(session) end
+        end)
+        -- 2) Completed sessions roster (only when Current yielded nothing).
+        if count == 0 then
+            local okSessions, sessions = pcall(C_DamageMeter.GetAvailableCombatSessions)
+            if okSessions and type(sessions) == "table" then
+                for _, s in ipairs(sessions) do
+                    local id = type(s) == "table" and SafeTableGet(s, "sessionID") or nil
+                    if id then
+                        local okSession, session = pcall(C_DamageMeter.GetCombatSessionFromID, id, meterType)
+                        if okSession then addRoster(session) end
+                    end
+                end
+            end
+        end
+        -- 3) Legacy per-type source (only when the roster path yielded nothing).
+        if count == 0 then
+            pcall(function()
+                local okL, legacy = pcall(C_DamageMeter.GetCombatSessionSourceFromType, sessionType, meterType, Addon.playerGUID)
+                if okL and type(legacy) == "table" then legacyTotal = NumberOrZero(MeterSourceTotal(legacy)) end
+            end)
+        end
+    end)
+    -- Prefer the player's own source. Fall back to the sole source (solo dummy
+    -- test) or the full session sum so the overlay still ticks even when the
+    -- mid-combat identity fields (sourceGUID/name/isLocalPlayer) read as secret.
+    local best = 0
+    if matched > 0 then best = matched
+    elseif count == 1 then best = allSum
+    elseif allSum > 0 then best = allSum
+    elseif sessionTotal > 0 then best = sessionTotal
+    elseif legacyTotal > 0 then best = legacyTotal end
+    if IsSecretValue(best) then return 0 end
+    return best
+end
+Addon.GetLiveDamageTotal = GetLiveDamageTotal
+
+-- Returns the local player's RAW DamageMeterCombatSource row from the live
+-- CURRENT DamageDone session, or nil. In combat this row's totalAmount /
+-- amountPerSecond are SECRET values: callers MUST hand them straight to a widget
+-- (AbbreviateNumbers + FontString:SetText) and NEVER tostring, divide, compare,
+-- boolean-test, or store them. `isLocalPlayer` is never secret, so locating the
+-- row here is safe. Mirrors the live read path EllesmereUIDamageMeters uses.
+local function GetLivePlayerMeterSource()
+    if not C_DamageMeter then return nil end
+    local found
+    pcall(function()
+        local sessionType, meterType = 1, 0
+        if Enum and Enum.DamageMeterSessionType then
+            local okS, v = pcall(function() return Enum.DamageMeterSessionType.Current end)
+            if okS and v then sessionType = v end
+        end
+        if Enum and Enum.DamageMeterType then
+            local okT, v = pcall(function() return Enum.DamageMeterType.DamageDone end)
+            if okT and v then meterType = v end
+        end
+        local okC, session = pcall(C_DamageMeter.GetCombatSessionFromType, sessionType, meterType)
+        if not okC or type(session) ~= "table" then return end
+        local sources = SafeTableGet(session, "combatSources")
+        if type(sources) ~= "table" then return end
+        for i = 1, #sources do
+            local s = sources[i]
+            if type(s) == "table" and SafeTableGet(s, "isLocalPlayer") == true then
+                found = s
+                return
+            end
+        end
+    end)
+    return found
+end
+Addon.GetLivePlayerMeterSource = GetLivePlayerMeterSource
+
+-- One-shot diagnostic for the live meter read (/dummydebug live). Returns a
+
+-- newline-joined report string; never throws. Run it DURING combat.
+local function DiagLiveDamage()
+    local out = {}
+    local ok, err = pcall(function()
+        local function add(s) out[#out + 1] = s end
+        if not C_DamageMeter then add("C_DamageMeter = nil") return end
+        add("apis: FromType=" .. tostring(C_DamageMeter.GetCombatSessionFromType ~= nil)
+            .. " AvailSessions=" .. tostring(C_DamageMeter.GetAvailableCombatSessions ~= nil)
+            .. " FromID=" .. tostring(C_DamageMeter.GetCombatSessionFromID ~= nil)
+            .. " DurationSecs=" .. tostring(C_DamageMeter.GetSessionDurationSeconds ~= nil))
+        local function S(v) local okv, r = pcall(tostring, v); if okv then return r end return "<err>" end
+        add("api2: CurSessionID=" .. tostring(C_DamageMeter.GetCurrentSessionID ~= nil)
+            .. " GetSessions=" .. tostring(C_DamageMeter.GetSessions ~= nil)
+            .. " SessionInfo=" .. tostring(C_DamageMeter.GetSessionInfo ~= nil)
+            .. " PlayerData=" .. tostring(C_DamageMeter.GetPlayerData ~= nil)
+            .. " PartyData=" .. tostring(C_DamageMeter.GetPartyData ~= nil))
+        local members = {}
+        pcall(function()
+            for k, v in pairs(C_DamageMeter) do
+                if #members < 40 then members[#members + 1] = tostring(k) .. (type(v) == "function" and "()" or ":" .. type(v)) end
+            end
+        end)
+        add("api3: C_DamageMeter members={" .. table.concat(members, ",") .. "}")
+        pcall(function()
+            if not C_DamageMeter.GetCurrentSessionID then return end
+            local okID, sid = pcall(C_DamageMeter.GetCurrentSessionID)
+            add("GetCurrentSessionID ok=" .. tostring(okID) .. " id=" .. S(sid))
+            if not (okID and sid) then return end
+            if C_DamageMeter.GetSessionInfo then
+                local okI, info = pcall(C_DamageMeter.GetSessionInfo, sid)
+                local ik, ic = "", 0
+                if okI and type(info) == "table" then
+                    for k, v in pairs(info) do ic = ic + 1; ik = ik .. tostring(k) .. "=" .. S(v) .. ","; if ic >= 15 then break end end
+                end
+                add("  SessionInfo ok=" .. tostring(okI) .. " type=" .. tostring(type(info)) .. " {" .. ik .. "}")
+            end
+            if C_DamageMeter.GetPlayerData then
+                local pg = UnitGUID("player")
+                local okP, pd = pcall(C_DamageMeter.GetPlayerData, sid, pg)
+                local pk, pc = "", 0
+                if okP and type(pd) == "table" then
+                    for k, v in pairs(pd) do pc = pc + 1; pk = pk .. tostring(k) .. "=" .. S(v) .. ","; if pc >= 20 then break end end
+                end
+                add("  PlayerData ok=" .. tostring(okP) .. " type=" .. tostring(type(pd)) .. " {" .. pk .. "}")
+            end
+            if C_DamageMeter.GetPartyData then
+                local okPa, party = pcall(C_DamageMeter.GetPartyData, sid)
+                local cnt = type(party) == "table" and #party or tostring(party)
+                add("  PartyData ok=" .. tostring(okPa) .. " type=" .. tostring(type(party)) .. " count=" .. tostring(cnt))
+                if okPa and type(party) == "table" and type(party[1]) == "table" then
+                    local qk, qc = "", 0
+                    for k, v in pairs(party[1]) do qc = qc + 1; qk = qk .. tostring(k) .. "=" .. S(v) .. ","; if qc >= 20 then break end end
+                    add("    party[1] {" .. qk .. "}")
+                end
+            end
+        end)
+        if C_Secrets and C_Secrets.ShouldUnitHealthBeSecret then
+            local okSH, sh = pcall(C_Secrets.ShouldUnitHealthBeSecret, "target")
+            add("C_Secrets.ShouldUnitHealthBeSecret('target') ok=" .. tostring(okSH) .. " = " .. S(sh))
+        else
+            add("C_Secrets.ShouldUnitHealthBeSecret = nil")
+        end
+        local sessionType = 1
+        if Enum and Enum.DamageMeterSessionType then
+            local okC, cv = pcall(function() return Enum.DamageMeterSessionType.Current end)
+            if okC and cv then sessionType = cv end
+        end
+        local meterType = 0
+        if Enum and Enum.DamageMeterType then
+            local okD, dv = pcall(function() return Enum.DamageMeterType.DamageDone end)
+            if okD and dv then meterType = dv end
+        end
+        add("sessionType=" .. tostring(sessionType) .. " meterType=" .. tostring(meterType)
+            .. " (DamageDone=" .. tostring(Enum and Enum.DamageMeterType and Enum.DamageMeterType.DamageDone) .. ")")
+        add("playerGUID secret=" .. tostring(IsSecretValue(Addon.playerGUID)) .. " playerName=" .. tostring(Addon.playerName))
+        local okS, session = pcall(C_DamageMeter.GetCombatSessionFromType, sessionType, meterType)
+        add("Current(" .. tostring(sessionType) .. ") GetCombatSessionFromType ok=" .. tostring(okS) .. " type=" .. tostring(type(session)))
+        if okS and type(session) == "table" then
+            local sources = SafeTableGet(session, "combatSources")
+            add("  combatSources=" .. tostring(type(sources) == "table" and #sources or tostring(sources)))
+            if type(sources) == "table" then
+                for i = 1, math.min(#sources, 6) do
+                    local src = sources[i]
+                    if type(src) == "table" then
+                        local ta = SafeTableGet(src, "totalAmount")
+                        add(string.format("   src[%d] isLocal=%s guidSecret=%s totalAmount:type=%s secret=%s",
+                            i, tostring(SafeTableGet(src, "isLocalPlayer")), tostring(IsSecretValue(SafeTableGet(src, "sourceGUID"))),
+                            type(ta), tostring(IsSecretValue(ta))))
+                        local okRaw, rawTA = pcall(rawget, src, "totalAmount")
+                        add(string.format("    src[%d] rawget.totalAmount ok=%s type=%s secret=%s S=%s",
+                            i, tostring(okRaw), type(rawTA), tostring(IsSecretValue(rawTA)), S(rawTA)))
+                        local okDir, dirTA = pcall(function() return src.totalAmount end)
+                        add(string.format("    src[%d] direct.totalAmount ok=%s type=%s secret=%s S=%s",
+                            i, tostring(okDir), type(dirTA), tostring(IsSecretValue(dirTA)), S(dirTA)))
+                        local rawAPS = rawget(src, "amountPerSecond")
+                        add("    src[" .. i .. "] rawget.amountPerSecond type=" .. type(rawAPS) .. " secret=" .. tostring(IsSecretValue(rawAPS)) .. " S=" .. S(rawAPS))
+                        local sk, sn = "", 0
+                        for k in pairs(src) do sn = sn + 1; sk = sk .. tostring(k) .. "," ; if sn >= 20 then break end end
+                        add("    src[" .. i .. "] keys={" .. sk .. "}")
+                        local aps = SafeTableGet(src, "amountPerSecond")
+                        add(string.format("    src[%d] amountPerSecond:type=%s secret=%s value=%s",
+                            i, type(aps), tostring(IsSecretValue(aps)), tostring(not IsSecretValue(aps) and aps or nil)))
+                        add("    src[" .. i .. "] MeterSourceTotal=" .. tostring(MeterSourceTotal(src)))
+                        local taOk, taVal = pcall(function() return ta + 0 end)
+                        add(string.format("    src[%d] totalAmount arith ok=%s val=%s err=%s",
+                            i, tostring(taOk), tostring(taOk and taVal or nil), tostring(not taOk and taVal or nil)))
+                    end
+                end
+            end
+            local keys, n = "", 0
+            for k in pairs(session) do n = n + 1; keys = keys .. tostring(k) .. "," ; if n >= 15 then break end end
+            add("  session keys={" .. keys .. "}")
+            local sTotal = SafeTableGet(session, "totalAmount")
+            add(string.format("  session.totalAmount:type=%s secret=%s value=%s",
+                type(sTotal), tostring(IsSecretValue(sTotal)), tostring(not IsSecretValue(sTotal) and sTotal or nil)))
+            local rawST = rawget(session, "totalAmount")
+            add("  session rawget.totalAmount type=" .. type(rawST) .. " secret=" .. tostring(IsSecretValue(rawST)) .. " S=" .. S(rawST))
+        end
+        add("GetLiveDamageTotal()=" .. tostring(Addon.GetLiveDamageTotal and Addon.GetLiveDamageTotal()))
+        pcall(function()
+            local okA, sess = pcall(C_DamageMeter.GetAvailableCombatSessions)
+            add("availSessions ok=" .. tostring(okA) .. " type=" .. type(sess) .. " n=" .. tostring(type(sess) == "table" and #sess or "?"))
+            if okA and type(sess) == "table" then
+                for i = 1, math.min(#sess, 5) do
+                    local s = sess[i]
+                    local id = (type(s) == "table" and rawget(s, "sessionID")) or (type(s) == "number" and s) or nil
+                    add("  avail[" .. i .. "] id=" .. S(id))
+                    if id then
+                        local okI, sess2 = pcall(C_DamageMeter.GetCombatSessionFromID, id, meterType)
+                        if okI and type(sess2) == "table" then
+                            local src2 = rawget(sess2, "combatSources")
+                            local r1 = type(src2) == "table" and src2[1] or nil
+                            local v1 = type(r1) == "table" and rawget(r1, "totalAmount") or nil
+                            add("    FromID(" .. S(id) .. ") src1.totalAmount type=" .. type(v1) .. " secret=" .. tostring(IsSecretValue(v1)) .. " S=" .. S(v1))
+                        end
+                    end
+                end
+            end
+        end)
+        pcall(function()
+            local okL, legacy = pcall(C_DamageMeter.GetCombatSessionSourceFromType, sessionType, meterType, Addon.playerGUID)
+            add("legacySource ok=" .. tostring(okL) .. " type=" .. tostring(type(legacy)))
+            if okL and type(legacy) == "table" then
+                local lk, ln = "", 0
+                for k in pairs(legacy) do ln = ln + 1; lk = lk .. tostring(k) .. ","; if ln >= 20 then break end end
+                add("  legacy keys={" .. lk .. "}")
+                local rawL = rawget(legacy, "totalAmount")
+                add("  legacy.totalAmount raw type=" .. type(rawL) .. " secret=" .. tostring(IsSecretValue(rawL)) .. " S=" .. S(rawL))
+            end
+        end)
+        add("GetCombatSnapTotal()=" .. tostring(Addon.GetCombatSnapTotal and Addon.GetCombatSnapTotal()))
+        add("overlayBaseDamage=" .. tostring(Addon.overlayBaseDamage))
+        add("healthTotal secret=" .. tostring(IsSecretValue(Addon.healthTotal))
+            .. " value=" .. tostring(Addon.healthTotal)
+            .. " healthBaseHp=" .. tostring(Addon.healthBaseHp)
+            .. " healthTrackReady=" .. tostring(Addon.healthTrackReady))
+        local okH, hp = pcall(UnitHealth, "target")
+        local okHM, mhp = pcall(UnitHealthMax, "target")
+        add(string.format("target: UnitHealth ok=%s type=%s secret=%s val=%s | UnitHealthMax ok=%s type=%s secret=%s val=%s",
+            tostring(okH), type(hp), tostring(IsSecretValue(hp)), tostring(not IsSecretValue(hp) and hp or nil),
+            tostring(okHM), type(mhp), tostring(IsSecretValue(mhp)), tostring(not IsSecretValue(mhp) and mhp or nil)))
+        if Addon.testActive then add("testActive=true elapsed=" .. string.format("%.1f", GetTime() - (Addon.startTime or GetTime()))) end
+        if Addon.overlaySamples and #Addon.overlaySamples > 0 then
+            add("overlaySamples (" .. #Addon.overlaySamples .. "), last 10:")
+            local start = math.max(1, #Addon.overlaySamples - 9)
+            for i = start, #Addon.overlaySamples do
+                local s = Addon.overlaySamples[i]
+                add(string.format("   t=%.1f", s.t or 0))
+            end
+        else
+            add("overlaySamples: none (overlay never ticked)")
+        end
+    end)
+    if not ok then out[#out + 1] = "DIAG ERROR: " .. tostring(err) end
+    return table.concat(out, "\n")
+end
+Addon.DiagLiveDamage = DiagLiveDamage

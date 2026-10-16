@@ -1173,6 +1173,11 @@ SlashCmdList["DUMMYDEBUG"] = function(msg)
             print(t .. "buffPollDiag=nil")
         end
         print(t .. "--- done ---")
+    elseif trimmed == "live" then
+        local t = "|cff33ff33[DummyAnalyzer]|r "
+        print(t .. "--- Live damage meter diag ---")
+        local txt = (Addon.DiagLiveDamage and Addon.DiagLiveDamage()) or "no diag"
+        for line in tostring(txt):gmatch("[^\n]+") do print(t .. line) end
     elseif trimmed == "secrets" then
         local t = "|cff33ff33[DummyAnalyzer]|r "
         print(t .. "--- 12.x Secret Aura Diagnostics ---")
@@ -1304,7 +1309,7 @@ SlashCmdList["DUMMYDEBUG"] = function(msg)
     else
         Addon.SetDebugLevel(Addon.debugLevel > 0 and 0 or 3)
         print("|cff33ff33[DummyAnalyzer]|r Debug mode " .. (Addon.debugMode and "|cff00ff00ENABLED" or "|cffff0000DISABLED"))
-        print("|cff33ff33[DummyAnalyzer]|r Subcommands: /dummydebug (toggle), /dummydebug level 0-3, /dummydebug dump, /dummydebug clear, /dummydebug data, /dummydebug secrets, /dummydebug auraevent")
+        print("|cff33ff33[DummyAnalyzer]|r Subcommands: /dummydebug (toggle), /dummydebug level 0-3, /dummydebug dump, /dummydebug clear, /dummydebug data, /dummydebug live, /dummydebug secrets, /dummydebug auraevent")
     end
 end
 
