@@ -529,10 +529,21 @@ local BUFF_KEY_ALIASES = {
     [132404] = "shield_block",
     [190456] = "ignore_pain",
 }
+-- Cast-based buff estimation table (12.x: live auras are unreadable in combat).
+-- When the player successfully casts spellId, we approximate a buff window of
+-- `duration` seconds and accumulate uptime. Durations are per-spell game data
+-- and are BEST-EFFORT approximations; extend this table for your spec. Spells
+-- not listed here are simply not tracked. `name` is used as the report label.
 local CAST_BUFF_DURATIONS = {
+    -- Protection Warrior (original entries)
     [2565] = {name = "Shield Block", duration = 8},
     [132404] = {name = "Shield Block", duration = 8},
     [190456] = {name = "Ignore Pain", duration = 15},
+    -- Beast Mastery Hunter
+    [19574] = {name = "Bestial Wrath", duration = 18},
+    [193530] = {name = "Aspect of the Wild", duration = 20},
+    [186265] = {name = "Aspect of the Turtle", duration = 8},
+    [321530] = {name = "Bloodshed", duration = 12},
 }
 local CAST_BUFF_DURATIONS_LOOKUP = {}
 for _, config in pairs(CAST_BUFF_DURATIONS) do

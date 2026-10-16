@@ -83,9 +83,10 @@ local function ResetBuffTracking()
     Addon.debuffUptime = {}
     Addon.buffGaps = {}
     Addon.lastBuffExpiry = {}
-    Addon.buffPollDiag = { calls = 0, auras = 0, trackable = 0, trackDebuff = 0, pollErr = 0, debuffErr = 0 }
+    Addon.buffPollDiag = { calls = 0, auras = 0, trackable = 0, trackDebuff = 0, pollErr = 0, debuffErr = 0, castBuffs = 0 }
     Addon.spellPowerCosts = {}
     Addon.auraInstanceMap = {}
+    Addon.auraTrackDiag = { events = 0, eventsActive = 0, added = 0, addedSecret = 0, addedNil = 0, addedErr = 0, addedElemSecret = 0, addedElemReadable = 0, infoSecret = 0, tracked = 0, removed = 0, rejected = 0, regMain = Addon.auraRegMain or false, regPet = Addon.auraRegPet or false }
 end
 
 local function StartBuff(spellId, spellName)
@@ -129,9 +130,20 @@ local function RefreshTimedBuff(spellId, spellName, duration)
     end
 end
 
+-- Cast-based buff estimation (12.x: live aura data is secret + taint-blocked in
+-- combat, so we cannot observe auras directly). When the player successfully
+-- casts a spell whose buff duration we know, we open/refresh a timed window and
+-- accumulate uptime from it. This is an APPROXIMATION: it will not see
+-- proc-granted or externally-refreshed auras, and only spells listed in
+-- CAST_BUFF_DURATIONS are tracked. Extend that table (Init.lua) to add spells.
 local function RecordKnownBuffCast(spellId, spellName)
-    -- 12.x: buff uptime tracking is unavailable (secret aura data + taint block).
-    -- Removed per user request. Kept as a no-op so existing callers keep working.
+    if not Addon.testActive then return end
+    if not spellId or IsSecretValue(spellId) then return end
+    local config = CAST_BUFF_DURATIONS[spellId]
+    if not config then return end
+    RefreshTimedBuff(spellId, config.name or spellName, config.duration)
+    local diag = Addon.buffPollDiag
+    if diag then diag.castBuffs = (diag.castBuffs or 0) + 1 end
 end
 
 local function StopBuff(spellId, spellName)
@@ -245,28 +257,52 @@ local function TrackAuraRemoved(instanceId)
 end
 
 local function OnUnitAuraEvent(_, unit, info)
+    local diag = Addon.auraTrackDiag
+    if diag then diag.events = diag.events + 1 end
     if not Addon.testActive then return end
-    if type(info) ~= "table" or IsSecretTable(info) then return end
+    if diag then diag.eventsActive = diag.eventsActive + 1 end
+    if type(info) ~= "table" then return end
     local u = AuraSafe(unit)
     if not u then return end
 
-    local added = info.addedAuras
-    if not IsSecretTable(added) then
-        for _, aura in ipairs(added or {}) do
+    -- WombatLog approach: index info with plain keys (a secret container may
+    -- still allow non-secret key reads); guard only the resulting arrays/values.
+    local okA, added = pcall(function() return info.addedAuras end)
+    if not okA then
+        if diag then diag.addedErr = diag.addedErr + 1 end
+    elseif IsSecretTable(added) then
+        if diag then diag.addedSecret = diag.addedSecret + 1 end
+        local ok1, a1 = pcall(function() return added[1] end)
+        if ok1 and type(a1) == "table" then
+            local okS, sid = pcall(function() return a1.spellId end)
+            if okS then
+                local okSec, isSec = pcall(issecretvalue, sid)
+                if okSec and isSec then
+                    if diag then diag.addedElemSecret = diag.addedElemSecret + 1 end
+                else
+                    if diag then diag.addedElemReadable = diag.addedElemReadable + 1 end
+                end
+            end
+        end
+    elseif type(added) ~= "table" then
+        if diag then diag.addedNil = diag.addedNil + 1 end
+    else
+        for _, aura in ipairs(added) do
+            if diag then diag.added = diag.added + 1 end
             TrackAuraAdded(u, aura)
         end
     end
 
-    local updated = info.updatedAuraInstanceIDs
-    if not IsSecretTable(updated) then
-        for _, id in ipairs(updated or {}) do
+    local okU, updated = pcall(function() return info.updatedAuraInstanceIDs end)
+    if okU and type(updated) == "table" and not IsSecretTable(updated) then
+        for _, id in ipairs(updated) do
             TrackAuraUpdated(id)
         end
     end
 
-    local removed = info.removedAuraInstanceIDs
-    if not IsSecretTable(removed) then
-        for _, id in ipairs(removed or {}) do
+    local okR, removed = pcall(function() return info.removedAuraInstanceIDs end)
+    if okR and type(removed) == "table" and not IsSecretTable(removed) then
+        for _, id in ipairs(removed) do
             TrackAuraRemoved(id)
         end
     end
@@ -277,6 +313,15 @@ local auraEventRegistered = pcall(auraEventFrame.RegisterUnitEvent, auraEventFra
 if auraEventRegistered then
     auraEventFrame:SetScript("OnEvent", OnUnitAuraEvent)
 end
+Addon.auraEventFrameMain = auraEventFrame
+local auraPetFrame = CreateFrame("Frame")
+local auraPetRegistered = pcall(auraPetFrame.RegisterUnitEvent, auraPetFrame, "UNIT_AURA", "pet")
+if auraPetRegistered then
+    auraPetFrame:SetScript("OnEvent", OnUnitAuraEvent)
+end
+Addon.auraEventFramePet = auraPetFrame
+Addon.auraRegMain = auraEventRegistered
+Addon.auraRegPet = auraPetRegistered
 
 local function ResetHealthFallback()
     Addon.healthBaseHp = nil
@@ -331,6 +376,7 @@ end
 local function PollTestMetrics()
     pcall(CaptureCombatSnapshot, false)
     pcall(TrackTargetHealth)
+    pcall(CloseExpiredTimedBuffs)
     pcall(PollPlayerBuffs)
     pcall(PollTargetDebuffs)
 end

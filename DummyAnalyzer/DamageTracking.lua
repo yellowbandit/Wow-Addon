@@ -32,6 +32,12 @@ local function ResetDamageData()
     Addon.totalDamage = 0
     Addon.damageFromEnemyFallback = false
     Addon.petSources = nil
+    Addon.meterDetailDiag = nil
+    Addon.meterSpellKeys = nil
+    Addon.meterSpellList = nil
+    Addon.meterDiagSpellsTotal = 0
+    Addon.meterDiagSpellsWithDetails = 0
+    Addon.meterDiagSpellsWithRows = 0
 end
 
 -- Amounts can live under several keys depending on the C_DamageMeter build and
@@ -131,6 +137,7 @@ local function AddMeterSource(block)
                 if not name or name == "" then
                     return
                 end
+                Addon.meterDiagSpellsTotal = (Addon.meterDiagSpellsTotal or 0) + 1
                 local totalAmt = SpellTotal(spell)
                 if not totalAmt or totalAmt <= 0 then
                     local details0 = SafeTableGet(spell, "combatSpellDetails")
@@ -154,12 +161,59 @@ local function AddMeterSource(block)
                         if type(d) == "table" then
                             local amt = NumberOrZero(SafeTableGet(d, "amount"))
                             if amt > highest then highest = amt end
-                            -- 12.x meter tags pet-cast spells with isPet on the
-                            -- combatSpellDetails rows; fold a whole spell row to
-                            -- the pet bucket if any hit is pet-sourced.
                             if SafeTableGet(d, "isPet") == true then isPetSpell = true end
                         end
                     end
+                end
+                -- 12.1.5: the meter tags creature-sourced spells by creatureName
+                -- (pet/guardian name); player-cast rows carry an empty name.
+                local cn = SafeTableGet(spell, "creatureName")
+                if not isPetSpell and type(cn) == "string" and cn ~= "" and cn ~= (Addon.playerName or "") then
+                    isPetSpell = true
+                end
+                if not Addon.meterSpellKeys then
+                    local sk = {}
+                    for k in pairs(spell) do sk[#sk + 1] = tostring(k) end
+                    table.sort(sk)
+                    Addon.meterSpellKeys = table.concat(sk, ",")
+                end
+                if type(details) == "table" then
+                    Addon.meterDiagSpellsWithDetails = (Addon.meterDiagSpellsWithDetails or 0) + 1
+                    if #details > 0 then
+                        Addon.meterDiagSpellsWithRows = (Addon.meterDiagSpellsWithRows or 0) + 1
+                        if not Addon.meterDetailDiag then
+                            local sampleKeys = {}
+                            local row1 = details[1]
+                            if type(row1) == "table" then
+                                for k in pairs(row1) do
+                                    sampleKeys[#sampleKeys + 1] = tostring(k)
+                                end
+                                table.sort(sampleKeys)
+                            end
+                            local okIsp, ispv = pcall(function() return row1 and row1.isPet end)
+                            local okUn, unv = pcall(function() return row1 and row1.unitName end)
+                            Addon.meterDetailDiag = {
+                                spellID = spellID,
+                                name = name,
+                                nDetails = #details,
+                                sampleKeys = table.concat(sampleKeys, ","),
+                                rawIsPet = okIsp and tostring(ispv) or "ERR",
+                                rawUnitName = okUn and tostring(unv) or "ERR",
+                            }
+                        end
+                    end
+                end
+                if not Addon.meterSpellList then Addon.meterSpellList = {} end
+                if #Addon.meterSpellList < 20 then
+                    local okCN, cnv = pcall(function() return spell.creatureName end)
+                    local cnDisp
+                    if not okCN then
+                        cnDisp = "ERR"
+                    else
+                        local okSec, isSec = pcall(issecretvalue, cnv)
+                        if okSec and isSec then cnDisp = "SECRET" else cnDisp = tostring(cnv) end
+                    end
+                    Addon.meterSpellList[#Addon.meterSpellList + 1] = string.format("%s#%s cn=%s", tostring(name), tostring(spellID), cnDisp)
                 end
                 local target = isPetSpell and Addon.petDamageData or Addon.damageData
                 if isPetSpell then
@@ -657,6 +711,10 @@ local function MergeMeterSpellDelta(amount, spell)
                 if amt > highest then highest = amt end
             end
         end
+    end
+    local cn = SafeTableGet(spell, "creatureName")
+    if not isPetSpell and type(cn) == "string" and cn ~= "" and cn ~= (Addon.playerName or "") then
+        isPetSpell = true
     end
     local bucket = isPetSpell and combatSnapPetData or combatSnapData
     local existing = bucket[name]

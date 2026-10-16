@@ -1108,6 +1108,71 @@ SlashCmdList["DUMMYDEBUG"] = function(msg)
     elseif trimmed == "clear" then
         if DummyAnalyzerDB then DummyAnalyzerDB._debugLog = {} end
         print("|cff33ff33[DummyAnalyzer]|r Debug log cleared.")
+    elseif trimmed == "data" then
+        local t = "|cff33ff33[DummyAnalyzer]|r "
+        local function countKeys(tbl)
+            if type(tbl) ~= "table" then return "nil" end
+            local n = 0
+            for _ in pairs(tbl) do n = n + 1 end
+            return n
+        end
+        local function sampleKeys(tbl, maxN)
+            if type(tbl) ~= "table" then return "-" end
+            local out, n = {}, 0
+            for k in pairs(tbl) do
+                n = n + 1
+                out[n] = tostring(k)
+                if n >= (maxN or 5) then break end
+            end
+            if n == 0 then return "(empty)" end
+            return table.concat(out, ", ")
+        end
+        print(t .. "--- DummyAnalyzer data state ---")
+        print(t .. "testActive=" .. tostring(Addon.testActive))
+        print(t .. "totalDamage=" .. tostring(Addon.totalDamage))
+        print(t .. "damageData keys=" .. countKeys(Addon.damageData))
+        print(t .. "petTotalDamage=" .. tostring(Addon.petTotalDamage))
+        print(t .. "petDamageData keys=" .. countKeys(Addon.petDamageData))
+        print(t .. "petSources=" .. tostring(Addon.petSources))
+        print(t .. "buffUptime keys=" .. countKeys(Addon.buffUptime) .. "  [" .. sampleKeys(Addon.buffUptime, 6) .. "]")
+        print(t .. "debuffUptime keys=" .. countKeys(Addon.debuffUptime) .. "  [" .. sampleKeys(Addon.debuffUptime, 6) .. "]")
+        print(t .. "buffGaps keys=" .. countKeys(Addon.buffGaps) .. "  [" .. sampleKeys(Addon.buffGaps, 6) .. "]")
+        print(t .. "activeBuffs keys=" .. countKeys(Addon.activeBuffs))
+        print(t .. "activeDebuffs keys=" .. countKeys(Addon.activeDebuffs))
+        print(t .. "auraInstanceMap keys=" .. countKeys(Addon.auraInstanceMap) .. "  sample=[" .. sampleKeys(Addon.auraInstanceMap, 6) .. "]")
+        print(t .. "spellHistory entries=" .. (type(Addon.spellHistory) == "table" and #Addon.spellHistory or "nil"))
+        local ad = Addon.auraTrackDiag
+        if ad then
+            print(t .. string.format("auraTrackDiag: events=%s active=%s added=%s addedSecret=%s addedNil=%s addedErr=%s elemSecret=%s elemReadable=%s infoSecret=%s tracked=%s removed=%s rejected=%s regMain=%s regPet=%s",
+                tostring(ad.events), tostring(ad.eventsActive), tostring(ad.added), tostring(ad.addedSecret), tostring(ad.addedNil), tostring(ad.addedErr), tostring(ad.addedElemSecret), tostring(ad.addedElemReadable), tostring(ad.infoSecret), tostring(ad.tracked), tostring(ad.removed), tostring(ad.rejected), tostring(ad.regMain), tostring(ad.regPet)))
+        else
+            print(t .. "auraTrackDiag=nil")
+        end
+        if Addon.meterSpellKeys then
+            print(t .. "meterSpellKeys=" .. tostring(Addon.meterSpellKeys))
+        end
+        if type(Addon.meterSpellList) == "table" and #Addon.meterSpellList > 0 then
+            print(t .. "meterSpellList (" .. #Addon.meterSpellList .. "):")
+            for _, row in ipairs(Addon.meterSpellList) do
+                print(t .. "  " .. tostring(row))
+            end
+        end
+        local md = Addon.meterDetailDiag
+        if md then
+            print(t .. string.format("meterDetailDiag: spellID=%s name=%s nDetails=%s keys=%s rawIsPet=%s rawUnitName=%s",
+                tostring(md.spellID), tostring(md.name), tostring(md.nDetails), tostring(md.sampleKeys), tostring(md.rawIsPet), tostring(md.rawUnitName)))
+        else
+            print(t .. "meterDetailDiag=nil")
+        end
+        print(t .. string.format("meterDiag: spellsTotal=%s spellsWithDetails=%s", tostring(Addon.meterDiagSpellsTotal), tostring(Addon.meterDiagSpellsWithDetails)))
+        local bp = Addon.buffPollDiag
+        if bp then
+            print(t .. string.format("buffPollDiag: calls=%s auras=%s trackable=%s trackDebuff=%s pollErr=%s debuffErr=%s castBuffs=%s",
+                tostring(bp.calls), tostring(bp.auras), tostring(bp.trackable), tostring(bp.trackDebuff), tostring(bp.pollErr), tostring(bp.debuffErr), tostring(bp.castBuffs)))
+        else
+            print(t .. "buffPollDiag=nil")
+        end
+        print(t .. "--- done ---")
     elseif trimmed == "secrets" then
         local t = "|cff33ff33[DummyAnalyzer]|r "
         print(t .. "--- 12.x Secret Aura Diagnostics ---")
@@ -1239,7 +1304,7 @@ SlashCmdList["DUMMYDEBUG"] = function(msg)
     else
         Addon.SetDebugLevel(Addon.debugLevel > 0 and 0 or 3)
         print("|cff33ff33[DummyAnalyzer]|r Debug mode " .. (Addon.debugMode and "|cff00ff00ENABLED" or "|cffff0000DISABLED"))
-        print("|cff33ff33[DummyAnalyzer]|r Subcommands: /dummydebug (toggle), /dummydebug level 0-3, /dummydebug dump, /dummydebug clear, /dummydebug secrets, /dummydebug auraevent")
+        print("|cff33ff33[DummyAnalyzer]|r Subcommands: /dummydebug (toggle), /dummydebug level 0-3, /dummydebug dump, /dummydebug clear, /dummydebug data, /dummydebug secrets, /dummydebug auraevent")
     end
 end
 
